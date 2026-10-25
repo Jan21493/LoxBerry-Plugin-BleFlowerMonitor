@@ -38,18 +38,9 @@
     <p class="miflora-hint"><TMPL_VAR NAME=hintMQTT ESCAPE=HTML></p>
     <label for="chkMQTTEnabled"><TMPL_VAR NAME=lblMQTTEnabled ESCAPE=HTML></label>
     <TMPL_VAR chkMQTTEnabled>
-    <label for="txtMQTTBroker"><TMPL_VAR NAME=lblMQTTBroker ESCAPE=HTML></label>
-    <TMPL_VAR txtMQTTBroker>
-    <label for="txtMQTTPort"><TMPL_VAR NAME=lblMQTTPort ESCAPE=HTML></label>
-    <TMPL_VAR txtMQTTPort>
     <label for="txtMQTTTopic"><TMPL_VAR NAME=lblMQTTTopic ESCAPE=HTML></label>
     <TMPL_VAR txtMQTTTopic>
     <p class="miflora-hint"><TMPL_VAR NAME=hintMQTTTopic ESCAPE=HTML></p>
-    <label for="txtMQTTUsername"><TMPL_VAR NAME=lblMQTTUsername ESCAPE=HTML></label>
-    <TMPL_VAR txtMQTTUsername>
-    <label for="txtMQTTPassword"><TMPL_VAR NAME=lblMQTTPassword ESCAPE=HTML></label>
-    <TMPL_VAR txtMQTTPassword>
-    <p class="miflora-hint"><TMPL_VAR NAME=hintMQTTAuth ESCAPE=HTML></p>
 </section>
 <section class="miflora-section">
     <h2><TMPL_VAR NAME=sectionUDP ESCAPE=HTML></h2>
@@ -74,5 +65,5 @@
 <script>
     $('select[name=chkPluginEnabled], select[name=chkLocaltime], select[name=chkMQTTEnabled], select[name=chkUDPEnabled]')
         .attr('data-role', 'flipswitch');
-    $('#txtMQTTPort, #txtMsUDPPort').attr({type: 'number', min: 1, max: 65535});
+    $('#txtMsUDPPort').attr({type: 'number', min: 1, max: 65535});
 </script>

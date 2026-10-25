@@ -4,6 +4,7 @@
 import argparse
 import asyncio
 import configparser
+from dataclasses import dataclass
 import fcntl
 import json
 import logging
@@ -11,11 +12,15 @@ from logging.handlers import RotatingFileHandler
 import os
 from pathlib import Path
 import socket
+import ssl
 import sys
 import threading
 import time
 
-from miflora.adapters import detect_adapters, inventory, select_adapter
+from miflora.adapters import adapter_kind, detect_adapters, inventory, select_adapter
+
+SCAN_RETRY_DELAY = 10
+LEGACY_MQTT_KEYS = ("MQTTBROKER", "MQTTPORT", "MQTTUSERNAME", "MQTTPASSWORD")
 
 
 def read_config(filename):
@@ -23,6 +28,8 @@ def read_config(filename):
     if not config.read(filename):
         raise ValueError(f"Plugin configuration file missing: {filename}")
     settings = config["MIFLORA"]
+    for key in LEGACY_MQTT_KEYS:
+        settings.pop(key, None)
     # Config::Simple quotes and escapes punctuation when saving the web form.
     for key, value in settings.items():
         if value.startswith('"') and value.endswith('"'):
@@ -36,20 +43,83 @@ def read_config(filename):
     if settings.getint("POLLFREQUENCY", 12) not in {1, 2, 4, 8, 12, 24}:
         raise ValueError("Invalid polling frequency")
     if settings.get("MQTTENABLED", "1") == "1":
-        if not settings.get("MQTTBROKER", "").strip():
-            raise ValueError("MQTT broker is required")
         topic = settings.get("MQTTTOPIC", "miflora")
         if not topic.strip("/ \t") or any(char in topic for char in "+#\0"):
             raise ValueError("MQTT topic must be nonempty and contain no wildcards")
-        check_port(settings.getint("MQTTPORT", 1883))
     if settings.get("UDPENABLED", "0") == "1":
         check_port(settings.getint("UDPPORT", 5006))
     return settings
 
 
+def migrate_config(filename):
+    """Persist type-based adapter selection once, before hci numbers can change."""
+    config = configparser.ConfigParser(interpolation=None)
+    config.optionxform = str
+    if not config.read(filename):
+        raise ValueError(f"Plugin configuration file missing: {filename}")
+    settings = config["MIFLORA"]
+    selection = settings.get("BTADAPTER", "serial")
+    if selection not in {"default", "usb", "serial"}:
+        settings["BTADAPTER"] = adapter_kind(selection, detect_adapters())
+    for key in LEGACY_MQTT_KEYS:
+        settings.pop(key, None)
+    with Path(filename).open("w") as handle:
+        config.write(handle)
+
+
 def check_port(port):
     if not 1 <= port <= 65535:
         raise ValueError("Port must be between 1 and 65535")
+
+
+@dataclass(frozen=True)
+class MQTTConnection:
+    host: str
+    port: int
+    username: str
+    password: str
+    tls: bool = False
+    verify: bool = True
+    cafile: str = ""
+
+
+def mqtt_connectiondetails(directory=None):
+    """Read the MQTT Basics schema used by LoxBerry::IO and loxberry.io."""
+    directory = Path(directory or os.environ.get("LBSCONFIG", "/opt/loxberry/config/system"))
+    try:
+        with (directory / "general.json").open() as handle:
+            mqtt = json.load(handle)["Mqtt"]
+        if not isinstance(mqtt, dict):
+            raise ValueError("Mqtt must be an object")
+        host = mqtt["Brokerhost"]
+        if not isinstance(host, str) or not host.strip():
+            raise ValueError("Brokerhost must be nonempty")
+        port = int(mqtt["Brokerport"])
+        check_port(port)
+        username = mqtt.get("Brokeruser") or ""
+        password = mqtt.get("Brokerpass") or ""
+        if not isinstance(username, str) or not isinstance(password, str):
+            raise ValueError("Broker credentials must be strings")
+        def enabled(value):
+            return str(value).lower() in {"1", "true", "yes", "on"}
+
+        local = enabled(mqtt.get("Uselocalbroker", "true"))
+        tls = enabled(mqtt.get("Tlsenabled" if local else "TlsExternalEnabled", "false"))
+        verify = not local and enabled(mqtt.get("TlsExternalValidatecert", "false"))
+        cafile = ""
+        if tls:
+            if local:
+                port = int(mqtt.get("Tlsport", 8883))
+                check_port(port)
+                cafile = "/etc/mosquitto/tls/ca.crt"
+            else:
+                cafile = str(directory / "mqtt_external_ca.crt")
+        return MQTTConnection(host, port, username, password, tls, verify, cafile)
+    except (OSError, ValueError, KeyError, TypeError) as error:
+        raise ValueError(
+            "Cannot read LoxBerry MQTT Basics. Configure MQTT Basics in LoxBerry "
+            "and check general.json and its permissions."
+        ) from error
 
 
 def miniserver_address(settings, directory):
@@ -81,6 +151,7 @@ def mqtt_publish(settings, samples):
     """Wait for CONNACK and every QoS 1 acknowledgement before disconnecting."""
     from paho.mqtt import client as mqtt
 
+    connection = mqtt_connectiondetails()
     connected = threading.Event()
     connection_error = []
 
@@ -92,10 +163,17 @@ def mqtt_publish(settings, samples):
     client = mqtt.Client(mqtt.CallbackAPIVersion.VERSION2)
     client.connect_timeout = 10
     client.on_connect = on_connect
-    if settings.get("MQTTUSERNAME", ""):
-        client.username_pw_set(settings["MQTTUSERNAME"], settings.get("MQTTPASSWORD", ""))
+    if connection.username:
+        client.username_pw_set(connection.username, connection.password)
+    if connection.tls:
+        context = ssl.create_default_context(cafile=connection.cafile if connection.verify else None)
+        if not connection.verify:
+            logging.warning("MQTT Basics disables TLS certificate verification")
+            context.check_hostname = False
+            context.verify_mode = ssl.CERT_NONE
+        client.tls_set_context(context)
     try:
-        client.connect(settings["MQTTBROKER"], settings.getint("MQTTPORT", 1883))
+        client.connect(connection.host, connection.port)
         client.loop_start()
         if not connected.wait(10):
             raise TimeoutError("MQTT broker did not acknowledge connection")
@@ -132,10 +210,19 @@ async def poll(settings, datafile):
     from miflora.miflora_poller import read_sample
     from miflora.miflora_scanner import scan
 
-    adapter = select_adapter(settings.get("BTADAPTER", "default"), detect_adapters())
+    selection = settings.get("BTADAPTER", "serial")
+    adapter = select_adapter(selection, detect_adapters())
     logging.info("Scanning with %s using Bleak / BlueZ D-Bus", adapter)
     datafile.write_text(f"Polling via {adapter} (Bleak / BlueZ D-Bus)...\n")
-    devices = await scan(adapter)
+    try:
+        devices = await scan(adapter)
+    except BleakError as error:
+        # Some USB adapters are reset by the kernel after a scan timeout and get a new hci number.
+        logging.warning("Scan with %s failed (%s); retrying once", adapter, error)
+        await asyncio.sleep(SCAN_RETRY_DELAY)
+        adapter = select_adapter(selection, detect_adapters())
+        logging.info("Retrying scan with %s", adapter)
+        devices = await scan(adapter)
     samples = []
     errors = []
     for device in devices:
@@ -215,8 +302,16 @@ def main():
     parser.add_argument("--datafile")
     parser.add_argument("--daemon", action="store_true")
     parser.add_argument("--list-adapters", action="store_true", help="Print sysfs adapter inventory as JSON")
+    parser.add_argument("--migrate-config", action="store_true", help="Migrate legacy adapter selection to USB/Onboard")
     parser.add_argument("--debug", action="store_true", help="Enable detailed logging")
     args = parser.parse_args()
+    if args.migrate_config:
+        try:
+            migrate_config(args.configfile)
+            return 0
+        except (OSError, ValueError, KeyError, configparser.Error) as error:
+            print(f"Cannot migrate MiFlora settings: {error}", file=sys.stderr)
+            return 1
     if args.list_adapters:
         try:
             print(json.dumps(inventory()))

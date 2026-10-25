@@ -69,15 +69,19 @@ fi
 echo "<INFO> Adding new config parameters"
 # Preserve existing transport choices, including UDP-only installations.
 for entry in \
-    "BTADAPTER=default" "UDPENABLED=1" "MQTTENABLED=0" \
-    "MQTTBROKER=localhost" "MQTTPORT=1883" "MQTTTOPIC=miflora" \
-    "MQTTUSERNAME=" "MQTTPASSWORD="
+    "BTADAPTER=default" "UDPENABLED=1" "MQTTENABLED=0" "MQTTTOPIC=miflora"
 do
     key=${entry%%=*}
     if ! grep -q -E "^[[:space:]]*$key[[:space:]]*=" "$PCONFIG/miflora.cfg"; then
         printf '\n%s\n' "$entry" >> "$PCONFIG/miflora.cfg" || exit 2
     fi
 done
+
+MIGRATION_STATUS=0
+if ! /usr/bin/python3 "$PBIN/miflora.py" --migrate-config --configfile "$PCONFIG/miflora.cfg"; then
+    echo "<WARNING> Please select Default, USB or Onboard in the MiFlora settings and save before polling."
+    MIGRATION_STATUS=1
+fi
 
 echo "<INFO> Copy back existing log files"
 cp -v -r /tmp/uploads/$PTEMPDIR/_upgrade/log/* $PLOG/
@@ -93,4 +97,4 @@ echo "<INFO> Remove temporary folders"
 
 /bin/sed -i "s#PLUGINFOLDER#$PDIR#g" $LBHOMEDIR/system/cron/cron.hourly/$PSHNAME
 
-exit 0
+exit "$MIGRATION_STATUS"

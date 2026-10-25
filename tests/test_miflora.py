@@ -2,6 +2,7 @@ import argparse
 import asyncio
 import configparser
 import importlib.util
+from html.parser import HTMLParser
 import json
 import os
 from pathlib import Path
@@ -40,11 +41,21 @@ def sensor_data(**changes):
 
 
 class AdapterTests(unittest.TestCase):
+    def setUp(self):
+        self.diagnostics = patch.object(adapters, "hci_details", return_value={
+            "hci10": "HCI 5.4 (0xd) Revision: 0x1234",
+        })
+        self.diagnostics.start()
+        self.addCleanup(self.diagnostics.stop)
+
     def test_inventory_type_selection_metadata_and_natural_order(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             controllers = root / "class/bluetooth"
             controllers.mkdir(parents=True)
+            model = root / "firmware/devicetree/base/model"
+            model.parent.mkdir(parents=True)
+            model.write_text("Raspberry Pi 5 Model B Rev 1.1\0")
             uart = root / "devices/platform/serial/tty/ttyAMA0/bluetooth/hci2"
             usb_parent = root / "devices/pci/usb1/1-1"
             usb = usb_parent / "1-1:1.0/bluetooth/hci10"
@@ -54,20 +65,38 @@ class AdapterTests(unittest.TestCase):
                 (target / "device").symlink_to(target.parent)
                 (target / "address").write_text("AA:BB:CC:DD:EE:FF")
             for key, value in {
-                "idVendor": "0bda", "idProduct": "a725",
+                "idVendor": "0bda", "idProduct": "a728",
                 "manufacturer": "Realtek", "product": "Bluetooth Radio",
             }.items():
                 (usb_parent / key).write_text(value)
             detected = adapters.detect_adapters(root)
             self.assertEqual([item.id for item in detected], ["hci2", "hci10"])
             self.assertEqual([item.kind for item in detected], ["serial", "usb"])
-            self.assertIn("RTL8761B", detected[1].label)
-            self.assertIn("0BDA:A725", detected[1].label)
+            self.assertTrue(detected[1].label.startswith("hci10 - "))
+            self.assertTrue(detected[1].label.endswith("0BDA:A728"))
+            self.assertIn("HCI 5.4 (0xd) Revision: 0x1234", detected[1].label)
+            self.assertEqual(detected[1].selection_label,
+                             "USB - currently mapped to hci10 - Realtek Bluetooth 5.4 USB-Adapter (RTL8761BU or newer)")
+            self.assertEqual(detected[0].selection_label,
+                             "Onboard - Raspberry Pi 5 Model B Rev 1.1 Bluetooth")
+            self.assertNotIn("/", detected[0].selection_label)
             self.assertEqual(adapters.select_adapter("usb", detected), "hci10")
             self.assertEqual(adapters.select_adapter("serial", detected), "hci2")
-            self.assertEqual(adapters.select_adapter("hci10", detected), "hci10")
+            self.assertEqual(adapters.adapter_kind("hci10", detected), "usb")
             with self.assertRaisesRegex(ValueError, "no fallback"):
                 adapters.select_adapter("default", detected)
+
+    def test_hci_version_includes_revision_for_all_adapters(self):
+        self.assertEqual(adapters.parse_hci_details("""
+hci6: Type: Primary Bus: USB
+    HCI Version: 5.4 (0xd)  Revision: 0x1234
+hci0: Type: Primary Bus: UART
+    HCI Version: 5.0 (0x9)  Revision: 0x15c
+"""), {"hci6": "HCI 5.4 (0xd)  Revision: 0x1234", "hci0": "HCI 5.0 (0x9)  Revision: 0x15c"})
+
+    def test_chip_description_is_based_on_actual_vid_pid(self):
+        self.assertIn("(RTL8761B)", adapters.KNOWN_USB_ADAPTERS["0bda:a725"])
+        self.assertNotIn("5.4", adapters.KNOWN_USB_ADAPTERS["0bda:a725"])
 
     def test_missing_and_invalid_selections_do_not_fallback(self):
         for selection in ("usb", "serial", "default", "hci3", "other", "../hci0"):
@@ -77,6 +106,15 @@ class AdapterTests(unittest.TestCase):
     def test_first_usb_sorted_by_number_not_name(self):
         detected = [adapters.Adapter("hci2", "usb", "", ""), adapters.Adapter("hci10", "usb", "", "")]
         self.assertEqual(adapters.select_adapter("usb", detected), "hci2")
+        self.assertEqual(adapters.select_adapter("usb", list(reversed(detected))), "hci2")
+        renumbered = [adapters.Adapter("hci6", "usb", "", ""), adapters.Adapter("hci0", "serial", "", "")]
+        self.assertEqual(adapters.select_adapter("usb", renumbered), "hci6")
+        self.assertEqual(adapters.adapter_kind("default", renumbered), "default")
+        self.assertEqual(adapters.select_adapter("default", renumbered), "hci0")
+        self.assertEqual(adapters.select_adapter("default", [
+            adapters.Adapter("hci0", "usb", "", ""),
+        ]), "hci0")
+        self.assertEqual(adapters.adapter_kind("hci6", renumbered), "usb")
 
 
 class ProtocolTests(unittest.TestCase):
@@ -140,9 +178,17 @@ class BLETests(unittest.IsolatedAsyncioTestCase):
                 self.assertIs(factory.call_args.args[0], device)
                 self.assertEqual(result["Firmware"], firmware)
                 self.assertEqual(client.write_gatt_char.await_count, writes)
+                self.assertEqual(
+                    [call.args[0] for call in client.read_gatt_char.await_args_list],
+                    [
+                        poller.NAME_UUID,
+                        "00001a02-0000-1000-8000-00805f9b34fb",
+                        "00001a01-0000-1000-8000-00805f9b34fb",
+                    ],
+                )
                 if writes:
                     client.write_gatt_char.assert_awaited_once_with(
-                        poller.MODE_UUID, b"\xa0\x1f", response=True
+                        "00001a00-0000-1000-8000-00805f9b34fb", b"\xa0\x1f", response=True
                     )
 
     async def test_retry_is_bounded_and_failure_not_hidden(self):
@@ -154,18 +200,46 @@ class BLETests(unittest.IsolatedAsyncioTestCase):
 
 
 class ConfigTests(unittest.TestCase):
+    def test_migration_persists_type_and_removes_old_plugin_credentials(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "miflora.cfg"
+            path.write_text((ROOT / "config/miflora.cfg").read_text().replace(
+                "BTADAPTER=serial", "BTADAPTER=hci0") +
+                "\nMQTTBROKER=old-host\nMQTTPASSWORD=secret\n")
+            with patch.object(plugin, "detect_adapters", return_value=[
+                adapters.Adapter("hci0", "usb", "", ""),
+            ]):
+                plugin.migrate_config(path)
+            config = plugin.read_config(path)
+            self.assertEqual(config["BTADAPTER"], "usb")
+            self.assertNotIn("MQTTBROKER", path.read_text())
+            self.assertNotIn("MQTTPASSWORD", path.read_text())
+            # Migration keeps upper-case INI keys for Config::Simple.
+            self.assertIn("BTADAPTER = usb", path.read_text())
+
+    def test_missing_legacy_adapter_requires_explicit_selection(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "miflora.cfg"
+            before = (ROOT / "config/miflora.cfg").read_text().replace(
+                "BTADAPTER=serial", "BTADAPTER=hci9")
+            path.write_text(before)
+            with patch.object(plugin, "detect_adapters", return_value=[]):
+                with self.assertRaisesRegex(ValueError, "Select Default, USB or Onboard"):
+                    plugin.migrate_config(path)
+            self.assertEqual(path.read_text(), before)
+
     def test_new_defaults_and_password_percent(self):
         self.assertEqual(settings()["MQTTENABLED"], "1")
         self.assertEqual(settings()["UDPENABLED"], "0")
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "miflora.cfg"
-            path.write_text((ROOT / "config/miflora.cfg").read_text().replace("MQTTPASSWORD=", "MQTTPASSWORD=50%secret"))
-            self.assertEqual(plugin.read_config(path)["MQTTPASSWORD"], "50%secret")
+            path.write_text((ROOT / "config/miflora.cfg").read_text().replace("MQTTTOPIC=miflora", "MQTTTOPIC=miflora%test"))
+            self.assertEqual(plugin.read_config(path)["MQTTTOPIC"], "miflora%test")
 
     def test_invalid_config_rejected(self):
         for changes in (
-            {"MQTTPORT": "0"}, {"MQTTPORT": "65536"}, {"MQTTTOPIC": "bad/+"},
-            {"MQTTBROKER": ""}, {"POLLFREQUENCY": "0"}, {"MQTTENABLED": "2"},
+            {"UDPENABLED": "1", "UDPPORT": "65536"}, {"MQTTTOPIC": "bad/+"},
+            {"POLLFREQUENCY": "0"}, {"MQTTENABLED": "2"},
         ):
             with self.subTest(changes=changes), tempfile.TemporaryDirectory() as directory:
                 config = configparser.ConfigParser()
@@ -233,6 +307,59 @@ class RunTests(unittest.TestCase):
 
 
 class TransportTests(unittest.TestCase):
+    def setUp(self):
+        directory = tempfile.TemporaryDirectory()
+        self.addCleanup(directory.cleanup)
+        self.system_config = Path(directory.name)
+        environment = patch.dict(os.environ, {"LBSCONFIG": directory.name})
+        environment.start()
+        self.addCleanup(environment.stop)
+        self.write_basics()
+
+    def write_basics(self, **changes):
+        mqtt = dict(Brokerhost="central-broker", Brokerport=1884,
+                    Brokeruser="central-user", Brokerpass=r'50%comma,quote"back\slash',
+                    Uselocalbroker="false")
+        mqtt.update(changes)
+        (self.system_config / "general.json").write_text(json.dumps({"Mqtt": mqtt}))
+
+    def test_mqtt_basics_loads_and_refreshes_central_credentials(self):
+        connection = plugin.mqtt_connectiondetails()
+        self.assertEqual(connection.host, "central-broker")
+        self.assertEqual(connection.port, 1884)
+        self.assertEqual(connection.password, r'50%comma,quote"back\slash')
+        self.write_basics(Brokerhost="new-broker", Brokerport="1885", Brokeruser="", Brokerpass="")
+        connection = plugin.mqtt_connectiondetails()
+        self.assertEqual(connection.host, "new-broker")
+        self.assertEqual(connection.port, 1885)
+        self.assertEqual(connection.username, "")
+
+    def test_missing_or_invalid_mqtt_basics_never_falls_back(self):
+        for content in (
+            "{}", "invalid json", '{"Mqtt": null}',
+            '{"Mqtt": {"Brokerhost": "", "Brokerport": 1883}}',
+            '{"Mqtt": {"Brokerhost": "broker", "Brokerport": 65536}}',
+        ):
+            (self.system_config / "general.json").write_text(content)
+            with self.assertRaisesRegex(ValueError, "MQTT Basics"):
+                plugin.mqtt_connectiondetails()
+        (self.system_config / "general.json").unlink()
+        with self.assertRaisesRegex(ValueError, "MQTT Basics"):
+            plugin.mqtt_connectiondetails()
+
+    def test_mqtt_basics_tls_settings_follow_loxberry_schema(self):
+        self.write_basics(Uselocalbroker="true", Tlsenabled="true", Tlsport="8884")
+        connection = plugin.mqtt_connectiondetails()
+        self.assertTrue(connection.tls)
+        self.assertFalse(connection.verify)
+        self.assertEqual(connection.port, 8884)
+        self.assertEqual(connection.cafile, "/etc/mosquitto/tls/ca.crt")
+        self.write_basics(TlsExternalEnabled="true", TlsExternalValidatecert="true")
+        connection = plugin.mqtt_connectiondetails()
+        self.assertTrue(connection.tls)
+        self.assertTrue(connection.verify)
+        self.assertEqual(connection.cafile, str(self.system_config / "mqtt_external_ca.crt"))
+
     def mqtt_client(self, rejected=False):
         from paho.mqtt import client as mqtt
         client = MagicMock()
@@ -251,9 +378,25 @@ class TransportTests(unittest.TestCase):
                                 [("C47C8D000001", {"Temperature": -12.3})])
         client.publish.assert_called_once_with("miflora/c47c8d000001/temperature", "-12.3", qos=1)
         client.publish.return_value.wait_for_publish.assert_called_once_with(timeout=10)
-        client.username_pw_set.assert_called_once_with("name", "password")
+        client.username_pw_set.assert_called_once_with("central-user", r'50%comma,quote"back\slash')
+        client.connect.assert_called_once_with("central-broker", 1884)
         client.disconnect.assert_called_once()
         client.loop_stop.assert_called_once()
+
+    def test_mqtt_basics_missing_reports_error_without_using_old_plugin_broker(self):
+        (self.system_config / "general.json").unlink()
+        with patch("paho.mqtt.client.Client") as client:
+            with self.assertRaisesRegex(ValueError, "MQTT Basics"):
+                plugin.mqtt_publish(settings(MQTTBROKER="stale-host", MQTTPORT="1883"), [])
+            client.assert_not_called()
+
+    def test_tls_client_uses_central_certificate_policy(self):
+        self.write_basics(TlsExternalEnabled="true", TlsExternalValidatecert="true")
+        client = self.mqtt_client()
+        with patch("paho.mqtt.client.Client", return_value=client), patch.object(plugin.ssl, "create_default_context") as context:
+            plugin.mqtt_publish(settings(), [])
+        context.assert_called_once_with(cafile=str(self.system_config / "mqtt_external_ca.crt"))
+        client.tls_set_context.assert_called_once_with(context.return_value)
 
     def test_mqtt_failure_is_explicit_and_connection_closed(self):
         for rejected in (True, False):
@@ -322,6 +465,7 @@ class TransportTests(unittest.TestCase):
             worker = threading.Thread(target=broker, args=(listener,))
             worker.start()
             try:
+                self.write_basics(Brokerhost="127.0.0.1", Brokerport=listener.getsockname()[1])
                 plugin.mqtt_publish(settings(MQTTBROKER="127.0.0.1", MQTTPORT=str(listener.getsockname()[1])),
                                     [("C47C8D000001", {"Temperature": 27.1})])
             finally:
@@ -364,6 +508,19 @@ class PollTests(unittest.IsolatedAsyncioTestCase):
                         self.assertIn("ERROR AA:01", data)
                         self.assertIn("ERROR MQTT", data)
 
+    async def test_scan_failure_redetects_reset_usb_adapter_once(self):
+        detected = [
+            [adapters.Adapter("hci2", "usb", "", "")],
+            [adapters.Adapter("hci3", "usb", "", "")],
+        ]
+        scan = AsyncMock(side_effect=[BleakError("Operation already in progress"), []])
+        with tempfile.TemporaryDirectory() as directory:
+            with patch.object(plugin, "detect_adapters", side_effect=detected):
+                with patch.object(scanner, "scan", scan), patch.object(plugin.asyncio, "sleep", AsyncMock()):
+                    status = await plugin.poll(settings(BTADAPTER="usb"), Path(directory) / "lastdata.dat")
+        self.assertEqual(status, 0)
+        self.assertEqual([call.args[0] for call in scan.await_args_list], ["hci2", "hci3"])
+
     async def test_no_sensors_clears_stale_data(self):
         with tempfile.TemporaryDirectory() as directory, patch.object(plugin, "mqtt_publish") as mqtt:
             datafile = Path(directory) / "lastdata.dat"
@@ -393,7 +550,7 @@ use Config::Simple;
 our @EXPORT = qw($lbpconfigdir $lbptemplatedir $lbpbindir $lbplogdir $lbpdatadir);
 our ($lbpconfigdir, $lbplogdir, $lbpdatadir) = ($ENV{TEST_DATA}) x 3;
 our $lbptemplatedir = "$ENV{TEST_ROOT}/templates";
-our $lbpbindir = "$ENV{TEST_ROOT}/bin";
+our $lbpbindir = "$ENV{TEST_DATA}/bin";
 sub readlanguage {
     my ($template) = @_;
     open(my $handle, '<', "$lbptemplatedir/lang/language_en.ini") or die $!;
@@ -407,6 +564,17 @@ sub get_miniservers { return (); }
 1;
 ''')
             (root / "LoxBerry/Web.pm").write_text("package LoxBerry::Web; sub lbheader {} sub lbfooter {} 1;")
+            (root / "bin").mkdir()
+            (root / "bin/miflora.py").write_text(
+                "print(" + repr(json.dumps([
+                    dict(id="hci6", kind="usb",
+                         label="hci6 - Realtek Bluetooth 5.4 USB-Adapter (RTL8761BU or newer) / HCI 5.4 Revision: 0x1234 / 0BDA:A728",
+                         selection_label="USB - currently mapped to hci6 - Realtek Bluetooth 5.4 USB-Adapter (RTL8761BU or newer)"),
+                    dict(id="hci2", kind="serial", label="hci2 - Raspberry Pi 5 Model B Rev 1.1 Bluetooth - HCI 5.0 Revision: 0x15c",
+                         selection_label="Onboard - Raspberry Pi 5 Model B Rev 1.1 Bluetooth"),
+                ])) + ")"
+            )
+            (root / "bin/run.sh").write_text('#!/bin/sh\nprintf "poll executed" > "' + str(root / "poll-executed") + '"\n')
             configfile = root / "miflora.cfg"
             configfile.write_text((ROOT / "config/miflora.cfg").read_text())
             env = dict(os.environ, PERL5LIB=str(root) + os.pathsep + os.environ.get("PERL5LIB", ""),
@@ -421,12 +589,46 @@ sub get_miniservers { return (); }
             self.assertIn("Installed Bluetooth adapters", html)
             self.assertNotIn("ARRAY(", html)
             self.assertNotIn("<TMPL_", html)
+            class Controls(HTMLParser):
+                def __init__(self):
+                    super().__init__()
+                    self.inputs = {}
+                    self.adapter_options = []
+                    self.adapter_select = False
+
+                def handle_starttag(self, tag, attrs):
+                    attrs = dict(attrs)
+                    if tag == "input":
+                        self.inputs[attrs.get("name")] = attrs
+                    if tag == "select":
+                        self.adapter_select = attrs.get("name") == "selBTAdapter"
+                    if tag == "option" and self.adapter_select:
+                        self.adapter_options.append(attrs["value"])
+
+                def handle_endtag(self, tag):
+                    if tag == "select":
+                        self.adapter_select = False
+
+            controls = Controls()
+            controls.feed(html)
+            for button in ("btnSave", "btnPoll", "btnRefresh"):
+                self.assertEqual(controls.inputs[button]["type"], "submit")
+                self.assertNotIn("disabled", controls.inputs[button])
+                self.assertEqual(controls.inputs[button].get("data-inline"), "true")
+            self.assertEqual(controls.adapter_options, ["default", "usb", "serial"])
+            self.assertIn("Default - hci0", html)
+            self.assertIn("USB - currently mapped to hci6 - Realtek Bluetooth 5.4 USB-Adapter (RTL8761BU or newer)", html)
+            self.assertIn("Onboard - Raspberry Pi 5 Model B Rev 1.1 Bluetooth", html)
+            for removed in ("txtMQTTBroker", "txtMQTTPort", "txtMQTTUsername", "txtMQTTPassword"):
+                self.assertNotIn(removed, html)
             form = dict(btnSave="Save", chkPluginEnabled="1", selPollFrequency="4", chkLocaltime="1",
-                        selBTAdapter="usb", chkMQTTEnabled="1", txtMQTTBroker="localhost",
-                        txtMQTTPort="1883", txtMQTTTopic="miflora", txtMQTTUsername="test",
+                        selBTAdapter="usb", chkMQTTEnabled="1", txtMQTTTopic="miflora",
                         chkUDPEnabled="0", selMiniServer="", txtMsUDPPort="5006")
-            for password in ("", "50%secret", r'comma,backslash\quote"semicolon;hash#'):
-                form["txtMQTTPassword"] = password
+            # Old broker values are removed rather than reused after saving.
+            with configfile.open("a") as handle:
+                handle.write("\nMQTTBROKER=stale-host\nMQTTPORT=1234\nMQTTUSERNAME=old\nMQTTPASSWORD=secret\n")
+            for topic in ("miflora", "miflora%test", "comma,backslash\\test"):
+                form["txtMQTTTopic"] = topic
                 payload = urlencode(form)
                 env.update(REQUEST_METHOD="POST", CONTENT_TYPE="application/x-www-form-urlencoded",
                            CONTENT_LENGTH=str(len(payload)))
@@ -437,14 +639,16 @@ sub get_miniservers { return (); }
                 saved = plugin.read_config(configfile)
                 self.assertEqual(saved["BTADAPTER"], "usb")
                 self.assertEqual(saved["POLLFREQUENCY"], "4")
-                self.assertEqual(saved["MQTTPASSWORD"], password)
+                self.assertEqual(saved["MQTTTOPIC"], topic)
+                for removed in ("MQTTBROKER", "MQTTPORT", "MQTTUSERNAME", "MQTTPASSWORD"):
+                    self.assertNotIn(removed, saved)
                 # A subsequent page load must keep punctuation and empty values.
                 result = subprocess.run(["perl", str(ROOT / "webfrontend/htmlauth/index.cgi")],
                                         env=dict(env, REQUEST_METHOD="GET", CONTENT_LENGTH="0"), capture_output=True)
                 self.assertEqual(result.returncode, 0, result.stderr.decode())
                 self.assertNotIn("ARRAY(", result.stdout.decode())
-            for field, invalid in (("txtMQTTPort", "65536"), ("txtMQTTTopic", "bad/#"),
-                                   ("chkMQTTEnabled", "0")):
+            for field, invalid in (("selBTAdapter", "hci6"), ("txtMQTTTopic", "bad/#"),
+                                   ("chkMQTTEnabled", "0"), ("selBTAdapter", "invalid")):
                 bad_form = dict(form, **{field: invalid})
                 payload = urlencode(bad_form)
                 before = configfile.read_text()
@@ -454,6 +658,22 @@ sub get_miniservers { return (); }
                 self.assertEqual(result.returncode, 0, result.stderr.decode())
                 self.assertIn('role="alert"', result.stdout.decode())
                 self.assertEqual(configfile.read_text(), before)
+            for button in ("btnRefresh", "btnPoll"):
+                (root / "lastdata.dat").write_text("latest sensor values")
+                payload = urlencode({button: controls.inputs[button]["value"]})
+                result = subprocess.run(["perl", str(ROOT / "webfrontend/htmlauth/index.cgi")],
+                                        input=payload.encode(), env=dict(env, CONTENT_LENGTH=str(len(payload))),
+                                        capture_output=True)
+                self.assertEqual(result.returncode, 0, result.stderr.decode())
+                self.assertEqual(configfile.read_text(), before)
+                self.assertIn("latest sensor values", result.stdout.decode())
+                if button == "btnPoll":
+                    import time
+                    for _ in range(100):
+                        if (root / "poll-executed").exists():
+                            break
+                        time.sleep(0.01)
+                    self.assertTrue((root / "poll-executed").exists())
 
 
 if __name__ == "__main__":

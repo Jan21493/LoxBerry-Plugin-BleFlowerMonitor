@@ -5,13 +5,13 @@ use warnings;
 use CGI;
 use Config::Simple;
 use HTML::Template;
-use JSON::PP qw(decode_json);
+use JSON::PP ();
 use POSIX qw(setsid);
 use LoxBerry::System;
 use LoxBerry::Web;
 
 my $cgi = CGI->new;
-LoxBerry::Web::lbheader("Xiaomi MiFlora", "https://github.com/Jan21493/loxberry-plugin-miflora", "help.html");
+LoxBerry::Web::lbheader("Xiaomi MiFlora", "https://github.com/Jan21493/Loxberry-Plugin-MiFlora", "help.html");
 my $pcfg = Config::Simple->new("$lbpconfigdir/miflora.cfg")
     or die Config::Simple->error();
 my $template = HTML::Template->new(
@@ -21,6 +21,11 @@ my $template = HTML::Template->new(
     die_on_bad_params => 0,
 );
 my %L = LoxBerry::System::readlanguage($template, "language.ini");
+foreach my $key (keys %L) {
+    if ($key =~ /^MIFLORA\.(.+)$/) {
+        $template->param($1 => $L{$key});
+    }
+}
 my %miniservers = LoxBerry::System::get_miniservers();
 my @errors;
 my $message = "";
@@ -28,13 +33,9 @@ my %fields = (
     chkPluginEnabled => ['ENABLED', '1'],
     selPollFrequency => ['POLLFREQUENCY', '12'],
     chkLocaltime => ['LOCALTIME', '1'],
-    selBTAdapter => ['BTADAPTER', 'default'],
+    selBTAdapter => ['BTADAPTER', 'serial'],
     chkMQTTEnabled => ['MQTTENABLED', '1'],
-    txtMQTTBroker => ['MQTTBROKER', 'localhost'],
-    txtMQTTPort => ['MQTTPORT', '1883'],
     txtMQTTTopic => ['MQTTTOPIC', 'miflora'],
-    txtMQTTUsername => ['MQTTUSERNAME', ''],
-    txtMQTTPassword => ['MQTTPASSWORD', ''],
     chkUDPEnabled => ['UDPENABLED', '0'],
     selMiniServer => ['MINISERVER', 'MINISERVER1'],
     txtMsUDPPort => ['UDPPORT', '5006'],
@@ -51,7 +52,7 @@ my @adapters;
 if (open(my $inventory, '-|', '/usr/bin/python3', "$lbpbindir/miflora.py", '--list-adapters')) {
     my $json = do { local $/; <$inventory> };
     if (close($inventory)) {
-        my $decoded = eval { decode_json($json) };
+        my $decoded = eval { JSON::PP::decode_json($json) };
         if ($@ || ref($decoded) ne 'ARRAY') {
             push @errors, $L{'MIFLORA.errAdapterInventory'};
         } else {
@@ -64,21 +65,23 @@ if (open(my $inventory, '-|', '/usr/bin/python3', "$lbpbindir/miflora.py", '--li
     push @errors, $L{'MIFLORA.errAdapterInventory'};
 }
 
-my @adapter_ids = ('default', 'serial', 'usb');
+my @adapter_ids = ('default', 'usb', 'serial');
 my %adapter_labels = (
-    default => $L{'MIFLORA.adapterDefault'},
+    default => 'Default - hci0',
     serial => $L{'MIFLORA.adapterSerial'},
     usb => $L{'MIFLORA.adapterUSB'},
 );
-foreach my $kind ('default', 'serial', 'usb') {
-    my ($match) = grep {
-        $kind eq 'default' ? $_->{id} eq 'hci0' : $_->{kind} eq $kind
-    } @adapters;
-    $adapter_labels{$kind} .= " - " . ($match ? $match->{label} : $L{'MIFLORA.adapterMissing'});
+foreach my $kind (@adapter_ids) {
+    next if $kind eq 'default';
+    my ($match) = grep { $_->{kind} eq $kind } @adapters;
+    $adapter_labels{$kind} = $match ? $match->{selection_label}
+        : "$adapter_labels{$kind} - $L{'MIFLORA.adapterMissing'}";
 }
-foreach my $adapter (@adapters) {
-    push @adapter_ids, $adapter->{id};
-    $adapter_labels{$adapter->{id}} = $adapter->{label};
+if ($values{selBTAdapter} !~ /\A(?:default|serial|usb)\z/) {
+    my $legacy = $values{selBTAdapter} eq 'default' ? 'hci0' : $values{selBTAdapter};
+    my ($match) = grep { $_->{id} eq $legacy && $_->{kind} =~ /^(?:usb|serial)$/ } @adapters;
+    $values{selBTAdapter} = $match ? $match->{kind} : 'serial';
+    push @errors, $L{'MIFLORA.errAdapterMigration'};
 }
 
 if ($cgi->request_method eq 'POST' && $cgi->param('btnSave')) {
@@ -93,15 +96,13 @@ if ($cgi->request_method eq 'POST' && $cgi->param('btnSave')) {
     push @validation_errors, $L{'MIFLORA.errInvalidInput'}
         unless $values{selPollFrequency} =~ /\A(?:1|2|4|8|12|24)\z/;
     push @validation_errors, $L{'MIFLORA.errInvalidInput'}
-        unless $values{selBTAdapter} =~ /\A(?:default|serial|usb|hci[0-9]+)\z/;
+        unless $values{selBTAdapter} =~ /\A(?:default|serial|usb)\z/;
     push @validation_errors, $L{'MIFLORA.errOutputRequired'}
         if $values{chkMQTTEnabled} ne '1' && $values{chkUDPEnabled} ne '1';
     if ($values{chkMQTTEnabled} eq '1') {
         push @validation_errors, $L{'MIFLORA.errMQTT'}
-            if $values{txtMQTTBroker} !~ /\S/
-            || $values{txtMQTTTopic} !~ /[^\/\s]/
+            if $values{txtMQTTTopic} !~ /[^\/\s]/
             || $values{txtMQTTTopic} =~ /[+#]/;
-        push @validation_errors, $L{'MIFLORA.errPort'} unless valid_port($values{txtMQTTPort});
     }
     if ($values{chkUDPEnabled} eq '1') {
         push @validation_errors, $L{'MIFLORA.errPort'} unless valid_port($values{txtMsUDPPort});
@@ -115,6 +116,9 @@ if ($cgi->request_method eq 'POST' && $cgi->param('btnSave')) {
         foreach my $field (keys %fields) {
             $pcfg->param("MIFLORA.$fields{$field}[0]", $values{$field});
         }
+        foreach my $key ('MQTTBROKER', 'MQTTPORT', 'MQTTUSERNAME', 'MQTTPASSWORD') {
+            $pcfg->delete("MIFLORA.$key");
+        }
         local $Config::Simple::USEQQ = 1;
         if ($pcfg->save()) {
             $message = $L{'MIFLORA.msgSaved'};
@@ -122,11 +126,6 @@ if ($cgi->request_method eq 'POST' && $cgi->param('btnSave')) {
             push @errors, $L{'MIFLORA.errSave'};
         }
     }
-}
-
-if (!exists $adapter_labels{$values{selBTAdapter}}) {
-    push @adapter_ids, $values{selBTAdapter};
-    $adapter_labels{$values{selBTAdapter}} = "$values{selBTAdapter} - $L{'MIFLORA.adapterMissing'}";
 }
 
 if ($cgi->request_method eq 'POST' && $cgi->param('btnPoll')) {
@@ -141,8 +140,8 @@ if ($cgi->request_method eq 'POST' && $cgi->param('btnPoll')) {
         exec('/bin/sh', "$lbpbindir/run.sh",
             '--configfile', "$lbpconfigdir/miflora.cfg",
             '--logfile', "$lbplogdir/xiaomi-miflora.log",
-            '--datafile', "$lbpdatadir/lastdata.dat");
-        die "Cannot start MiFlora poll: $!";
+            '--datafile', "$lbpdatadir/lastdata.dat")
+            or die "Cannot start MiFlora poll: $!";
     } else {
         $message = $L{'MIFLORA.txtPollingMessage'};
     }
@@ -156,15 +155,11 @@ foreach my $field ('chkPluginEnabled', 'chkMQTTEnabled', 'chkUDPEnabled', 'chkLo
         -labels => {'0' => 'Off', '1' => 'On'}, -default => $values{$field}, -override => 1,
     ));
 }
-foreach my $field ('txtMQTTBroker', 'txtMQTTPort', 'txtMQTTTopic', 'txtMQTTUsername', 'txtMsUDPPort') {
+foreach my $field ('txtMQTTTopic', 'txtMsUDPPort') {
     $template->param($field => $cgi->textfield(
         -name => $field, -id => $field, -default => $values{$field}, -override => 1,
     ));
 }
-$template->param(txtMQTTPassword => $cgi->password_field(
-    -name => 'txtMQTTPassword', -id => 'txtMQTTPassword',
-    -default => $values{txtMQTTPassword}, -override => 1,
-));
 $template->param(selBTAdapter => $cgi->popup_menu(
     -name => 'selBTAdapter', -id => 'selBTAdapter', -values => \@adapter_ids,
     -labels => \%adapter_labels, -default => $values{selBTAdapter}, -override => 1,
@@ -181,9 +176,9 @@ $template->param(selPollFrequency => $cgi->popup_menu(
     -labels => \%frequency_labels, -default => $values{selPollFrequency}, -override => 1,
 ));
 foreach my $button ('btnSave', 'btnPoll') {
-    $template->param($button => $cgi->submit(-name => $button, -value => $L{"MIFLORA.$button"}));
+    $template->param($button => $cgi->submit(-name => $button, -value => $L{"MIFLORA.$button"}, "-data-inline" => "true"));
 }
-$template->param(btnRefresh => $cgi->submit(-name => 'btnRefresh', -value => $L{'MIFLORA.btnRefresh'}));
+$template->param(btnRefresh => $cgi->submit(-name => 'btnRefresh', -value => $L{'MIFLORA.btnRefresh'}, "-data-inline" => "true"));
 my $lastdata = "";
 if (-e "$lbpdatadir/lastdata.dat") {
     open(my $handle, '<', "$lbpdatadir/lastdata.dat") or die "Cannot read last data: $!";
@@ -194,11 +189,6 @@ $template->param(txtLastData => $cgi->textarea(
     -name => 'txtLastData', -id => 'txtLastData', -rows => 12, -columns => 60,
     -readonly => 'readonly', -default => $lastdata, -override => 1,
 ));
-foreach my $key (keys %L) {
-    if ($key =~ /^MIFLORA\.(.+)$/) {
-        $template->param($1 => $L{$key});
-    }
-}
 $template->param(adapters => [map { {label => $_->{label}} } @adapters]);
 $template->param(errors => [map { {error => $_} } @errors], message => $message);
 print $template->output();

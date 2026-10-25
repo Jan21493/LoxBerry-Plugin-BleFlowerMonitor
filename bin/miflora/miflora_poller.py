@@ -10,9 +10,9 @@ from bleak.backends.bluezdbus.client import BleakClientBlueZDBus
 from bleak.exc import BleakError
 
 NAME_UUID = "00002a00-0000-1000-8000-00805f9b34fb"
-MODE_UUID = "00001201-0000-1000-8000-00805f9b34fb"
-DATA_UUID = "00001202-0000-1000-8000-00805f9b34fb"
-FIRMWARE_UUID = "00001204-0000-1000-8000-00805f9b34fb"
+MODE_UUID = "00001a00-0000-1000-8000-00805f9b34fb"
+DATA_UUID = "00001a01-0000-1000-8000-00805f9b34fb"
+FIRMWARE_UUID = "00001a02-0000-1000-8000-00805f9b34fb"
 
 
 def decode_sample(name, firmware_data, sensor_data):
