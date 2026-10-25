@@ -1,20 +1,29 @@
-"""Scan for miflora devices"""
+"""Discover MiFlora devices on one BlueZ adapter."""
 
-# use only lower case names here
-VALID_DEVICE_NAMES = ['flower mate',
-                      'flower care']
+import asyncio
 
-DEVICE_PREFIX = 'C4:7C:8D:'
+from bleak import BleakScanner
+from bleak.backends.bluezdbus.scanner import BleakScannerBlueZDBus
+
+VALID_DEVICE_NAMES = {"flower mate", "flower care"}
+DEVICE_PREFIX = "C4:7C:8D:"
 
 
-def scan(backend, timeout=10):
-    """Scan for miflora devices.
+async def scan(adapter, timeout=10):
+    devices = {}
 
-    Note: this must be run as root!
-    """
-    result = []
-    for (mac, name) in backend.scan_for_devices(timeout):
-        if (name is not None and name.lower() in VALID_DEVICE_NAMES) or \
-                mac is not None and mac.upper().startswith(DEVICE_PREFIX):
-            result.append(mac.upper())
-    return result
+    def detected(device, advertisement):
+        name = advertisement.local_name or device.name or ""
+        if (name.lower() in VALID_DEVICE_NAMES
+                or device.address.upper().startswith(DEVICE_PREFIX)):
+            devices[device.address.upper()] = device
+
+    # adapter is needed by Bleak <= 2.0; newer releases use bluez["adapter"].
+    async with BleakScanner(
+        detection_callback=detected,
+        backend=BleakScannerBlueZDBus,
+        adapter=adapter,
+        bluez={"adapter": adapter},
+    ):
+        await asyncio.sleep(timeout)
+    return [devices[address] for address in sorted(devices)]

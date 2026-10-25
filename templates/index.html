@@ -1,247 +1,78 @@
-<h1>
-	<TMPL_VAR NAME=T::BASIC.HEADING_BASICSETTINGS>
-</h1>
+<style>
+    .miflora-section { margin: 1.5em 0; }
+    .miflora-section h2 { border-bottom: 1px solid #aaa; padding-bottom: .4em; }
+    .miflora-hint { font-size: .9em; color: #555; margin: .3em 0 1em; }
+    .miflora-message { padding: .8em; border: 1px solid #888; white-space: pre-line; }
+    .miflora-error { padding: .8em; border: 1px solid #b00; color: #b00; }
+</style>
+<h1><TMPL_VAR NAME=heading ESCAPE=HTML></h1>
+<TMPL_LOOP errors><p class="miflora-error" role="alert"><TMPL_VAR NAME=error ESCAPE=HTML></p></TMPL_LOOP>
+<TMPL_IF message><p class="miflora-message" role="status"><TMPL_VAR NAME=message ESCAPE=HTML></p></TMPL_IF>
 <TMPL_VAR frmStart>
-	<table class="formtable" border="0" width="100%">
-		<tr>
-			<td width="25%">
-				<label id="lblPluginEnabled">
-					<TMPL_VAR lblPluginEnabled>
-				</label>
-			</td>
-			<td width="50%">
-				<TMPL_VAR chkPluginEnabled>
-
-					<!-- per Javascript dem Element das "data-role"-Attribut hinzufügen -->
-					<script>
-						// Add some attributes PERL::CGI doesn't provide
-						$('select[name=chkPluginEnabled]').attr('data-role', 'flipswitch');
-					</script>
-			</td>
-			<td width="25%">
-				&nbsp;
-			</td>
-		</tr>
-		<tr>
-			<td width="25%">
-				<label id="lblMiniServer">
-					<TMPL_VAR lblMiniServer>
-				</label>
-			</td>
-			<td width="50%">
-				<TMPL_VAR selMiniServer>
-			</td>
-			<td width="25%">
-				&nbsp;
-			</td>
-		</tr>
-		<tr>
-			<td width="25%">
-				<label id="lblUDPEnabled">
-					<TMPL_VAR lblUDPEnabled>
-				</label>
-			</td>
-			<td width="50%">
-				<TMPL_VAR chkUDPEnabled>
-
-					<!-- per Javascript dem Element das "data-role"-Attribut hinzufügen -->
-					<script>
-						// Add some attributes PERL::CGI doesn't provide
-						$('select[name=chkUDPEnabled]').attr('data-role', 'flipswitch');
-					</script>
-			</td>
-			<td width="25%">
-				&nbsp;
-			</td>
-		</tr>
-		<tr>
-			<td width="25%">
-				<label id="lblMsUDPPort">
-					<TMPL_VAR lblMsUDPPort>
-				</label>
-			</td>
-			<td width="50%">
-				<TMPL_VAR txtMsUDPPort>
-			</td>
-			<td width="25%">
-				&nbsp;
-			</td>
-		</tr>
-
-		<tr>
-			<td width="25%">
-				<label id="lblMQTTEnabled">
-					<TMPL_VAR lblMQTTEnabled>
-				</label>
-			</td>
-			<td width="50%">
-				<TMPL_VAR chkMQTTEnabled>
-
-					<!-- per Javascript dem Element das "data-role"-Attribut hinzufügen -->
-					<script>
-						// Add some attributes PERL::CGI doesn't provide
-						$('select[name=chkMQTTEnabled]').attr('data-role', 'flipswitch');
-					</script>
-			</td>
-			<td width="25%">
-				&nbsp;
-			</td>
-		</tr>
-
-		<tr>
-			<td width="25%">
-				<label id="lblMQTTBroker">
-					<TMPL_VAR lblMQTTBroker>
-				</label>
-			</td>
-			<td width="50%">
-				<TMPL_VAR txtMQTTBroker>
-			</td>
-			<td width="25%">
-				&nbsp;
-			</td>
-		</tr>
-
-		<tr>
-			<td width="25%">
-				<label id="lblMQTTPort">
-					<TMPL_VAR lblMQTTPort>
-				</label>
-			</td>
-			<td width="50%">
-				<TMPL_VAR txtMQTTPort>
-			</td>
-			<td width="25%">
-				&nbsp;
-			</td>
-		</tr>
-
-		<tr>
-			<td width="25%">
-				<label id="lblMQTTTopic">
-					<TMPL_VAR lblMQTTTopic>
-				</label>
-			</td>
-			<td width="50%">
-				<TMPL_VAR txtMQTTTopic>
-			</td>
-			<td width="25%">
-				&nbsp;
-			</td>
-		</tr>
-
-		<tr>
-			<td width="25%">
-				<label id="lblMQTTUsername">
-					<TMPL_VAR lblMQTTUsername>
-				</label>
-			</td>
-			<td width="50%">
-				<TMPL_VAR txtMQTTUsername>
-			</td>
-			<td width="25%">
-				&nbsp;
-			</td>
-		</tr>
-
-		<tr>
-			<td width="25%">
-				<label id="lblMQTTPassword">
-					<TMPL_VAR lblMQTTPassword>
-				</label>
-			</td>
-			<td width="50%">
-				<TMPL_VAR txtMQTTPassword>
-			</td>
-			<td width="25%">
-				&nbsp;
-			</td>
-		</tr>
-
-		<tr>
-			<td width="25%">
-				<label id="lblLocaltime">
-					<TMPL_VAR lblLocaltime>
-				</label>
-			</td>
-			<td width="50%">
-				<TMPL_VAR chkLocaltime>
-
-					<!-- per Javascript dem Element das "data-role"-Attribut hinzufügen -->
-					<script>
-						// Add some attributes PERL::CGI doesn't provide
-						$('select[name=chkLocaltime]').attr('data-role', 'flipswitch');
-					</script>
-			</td>
-			<td width="25%">
-				&nbsp;
-			</td>
-		</tr>
-		<tr>
-			<td width="25%">
-				<label id="lblPollFrequency">
-					<TMPL_VAR lblPollFrequency>
-				</label>
-			</td>
-			<td width="50%">
-				<TMPL_VAR selPollFrequency>
-			</td>
-			<td width="25%">
-				&nbsp;
-			</td>
-		</tr>
-		<tr>
-			<td width="25%">
-				&nbsp;
-			</td>
-			<td width="50%">
-				<table border="0" width="100%">
-					<tr>
-						<td width="49%">
-							<TMPL_VAR btnSave>
-						</td>
-						<td>&nbsp;</td>
-						<td width="49%">
-							<TMPL_VAR btnPoll>
-						</td>
-					</tr>
-				</table>
-			</td>
-			<td width="25%">
-				&nbsp;
-			</td>
-		</tr>
-		<tr height="40px">
-			<td>&nbsp</td>
-		</tr>
-		<tr>
-			<td width="25%">
-				<label id="lblLastData">
-					<TMPL_VAR lblLastData>
-				</label>
-			</td>
-			<td width="50%">
-				<TMPL_VAR txtLastData>
-			</td>
-			<td width="25%">
-				&nbsp;
-			</td>
-		</tr>
-		<tr>
-			<td width="25%">
-				&nbsp;
-			</td>
-			<td width="50%">
-				<TMPL_VAR btnRefresh>
-			</td>
-			<td width="25%">
-				&nbsp;
-			</td>
-		</tr>
-	</table>
-
-	<TMPL_VAR frmEnd>
-
-		<i>
-			<TMPL_VAR NAME=T::FOOTER.GREETING>
-		</i>
+<section class="miflora-section">
+    <h2><TMPL_VAR NAME=sectionGeneral ESCAPE=HTML></h2>
+    <p class="miflora-hint"><TMPL_VAR NAME=hintGeneral ESCAPE=HTML></p>
+    <label for="chkPluginEnabled"><TMPL_VAR NAME=lblPluginEnabled ESCAPE=HTML></label>
+    <TMPL_VAR chkPluginEnabled>
+    <label for="selPollFrequency"><TMPL_VAR NAME=lblPollFrequency ESCAPE=HTML></label>
+    <TMPL_VAR selPollFrequency>
+    <label for="chkLocaltime"><TMPL_VAR NAME=lblLocaltime ESCAPE=HTML></label>
+    <TMPL_VAR chkLocaltime>
+    <p class="miflora-hint"><TMPL_VAR NAME=hintLocaltime ESCAPE=HTML></p>
+</section>
+<section class="miflora-section">
+    <h2><TMPL_VAR NAME=sectionBluetooth ESCAPE=HTML></h2>
+    <p class="miflora-hint"><TMPL_VAR NAME=hintBluetooth ESCAPE=HTML></p>
+    <label for="selBTAdapter"><TMPL_VAR NAME=lblBTAdapter ESCAPE=HTML></label>
+    <TMPL_VAR selBTAdapter>
+    <p class="miflora-hint"><TMPL_VAR NAME=hintBTAdapter ESCAPE=HTML></p>
+    <h3><TMPL_VAR NAME=lblDetectedAdapters ESCAPE=HTML></h3>
+    <TMPL_IF adapters>
+        <ul><TMPL_LOOP adapters><li><TMPL_VAR NAME=label ESCAPE=HTML></li></TMPL_LOOP></ul>
+    <TMPL_ELSE>
+        <p><TMPL_VAR NAME=adapterMissing ESCAPE=HTML></p>
+    </TMPL_IF>
+</section>
+<section class="miflora-section">
+    <h2><TMPL_VAR NAME=sectionMQTT ESCAPE=HTML></h2>
+    <p class="miflora-hint"><TMPL_VAR NAME=hintMQTT ESCAPE=HTML></p>
+    <label for="chkMQTTEnabled"><TMPL_VAR NAME=lblMQTTEnabled ESCAPE=HTML></label>
+    <TMPL_VAR chkMQTTEnabled>
+    <label for="txtMQTTBroker"><TMPL_VAR NAME=lblMQTTBroker ESCAPE=HTML></label>
+    <TMPL_VAR txtMQTTBroker>
+    <label for="txtMQTTPort"><TMPL_VAR NAME=lblMQTTPort ESCAPE=HTML></label>
+    <TMPL_VAR txtMQTTPort>
+    <label for="txtMQTTTopic"><TMPL_VAR NAME=lblMQTTTopic ESCAPE=HTML></label>
+    <TMPL_VAR txtMQTTTopic>
+    <p class="miflora-hint"><TMPL_VAR NAME=hintMQTTTopic ESCAPE=HTML></p>
+    <label for="txtMQTTUsername"><TMPL_VAR NAME=lblMQTTUsername ESCAPE=HTML></label>
+    <TMPL_VAR txtMQTTUsername>
+    <label for="txtMQTTPassword"><TMPL_VAR NAME=lblMQTTPassword ESCAPE=HTML></label>
+    <TMPL_VAR txtMQTTPassword>
+    <p class="miflora-hint"><TMPL_VAR NAME=hintMQTTAuth ESCAPE=HTML></p>
+</section>
+<section class="miflora-section">
+    <h2><TMPL_VAR NAME=sectionUDP ESCAPE=HTML></h2>
+    <p class="miflora-hint"><TMPL_VAR NAME=hintUDP ESCAPE=HTML></p>
+    <label for="chkUDPEnabled"><TMPL_VAR NAME=lblUDPEnabled ESCAPE=HTML></label>
+    <TMPL_VAR chkUDPEnabled>
+    <label for="selMiniServer"><TMPL_VAR NAME=lblMiniServer ESCAPE=HTML></label>
+    <TMPL_VAR selMiniServer>
+    <label for="txtMsUDPPort"><TMPL_VAR NAME=lblMsUDPPort ESCAPE=HTML></label>
+    <TMPL_VAR txtMsUDPPort>
+</section>
+<TMPL_VAR btnSave>
+<section class="miflora-section">
+    <h2><TMPL_VAR NAME=sectionDiagnostics ESCAPE=HTML></h2>
+    <p class="miflora-hint"><TMPL_VAR NAME=hintDiagnostics ESCAPE=HTML></p>
+    <TMPL_VAR btnPoll>
+    <label for="txtLastData"><TMPL_VAR NAME=lblLastData ESCAPE=HTML></label>
+    <TMPL_VAR txtLastData>
+    <TMPL_VAR btnRefresh>
+</section>
+<TMPL_VAR frmEnd>
+<script>
+    $('select[name=chkPluginEnabled], select[name=chkLocaltime], select[name=chkMQTTEnabled], select[name=chkUDPEnabled]')
+        .attr('data-role', 'flipswitch');
+    $('#txtMQTTPort, #txtMsUDPPort').attr({type: 'number', min: 1, max: 65535});
+</script>

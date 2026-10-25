@@ -1,357 +1,210 @@
 #!/usr/bin/perl
 
-# Einbinden der LoxBerry-Module
+use strict;
+use warnings;
 use CGI;
+use Config::Simple;
+use HTML::Template;
+use JSON::PP qw(decode_json);
+use POSIX qw(setsid);
 use LoxBerry::System;
 use LoxBerry::Web;
-  
-# Die Version des Plugins wird direkt aus der Plugin-Datenbank gelesen.
-my $version = LoxBerry::System::pluginversion();
- 
-# Mit dieser Konstruktion lesen wir uns alle POST-Parameter in den Namespace R.
+
 my $cgi = CGI->new;
-$cgi->import_names('R');
-# Ab jetzt kann beispielsweise ein POST-Parameter 'form' ausgelesen werden mit $R::form.
- 
- 
-# Wir Übergeben die Titelzeile (mit Versionsnummer), einen Link ins Wiki und das Hilfe-Template.
-# Um die Sprache der Hilfe brauchen wir uns im Code nicht weiter zu kümmern.
-LoxBerry::Web::lbheader("Xiaomi Mi Flora Flower Monitor", "www.google.com", "help.html");
-  
-# Wir holen uns die Plugin-Config in den Hash %pcfg. Damit kannst du die Parameter mit $pcfg{'Section.Label'} direkt auslesen.
-#my %pcfg;
-#tie %pcfg, "Config::Simple", "$lbpconfigdir/miflora.cfg";
-my $pcfg = new Config::Simple("$lbpconfigdir/miflora.cfg");
- 
-
-# Wir initialisieren unser Template. Der Pfad zum Templateverzeichnis steht in der globalen Variable $lbptemplatedir.
-
+LoxBerry::Web::lbheader("Xiaomi MiFlora", "https://github.com/Jan21493/loxberry-plugin-miflora", "help.html");
+my $pcfg = Config::Simple->new("$lbpconfigdir/miflora.cfg")
+    or die Config::Simple->error();
 my $template = HTML::Template->new(
     filename => "$lbptemplatedir/index.html",
     global_vars => 1,
     loop_context_vars => 1,
     die_on_bad_params => 0,
-	associate => $cgi,
 );
-  
-# Jetzt lassen wir uns die Sprachphrasen lesen. Ohne Pfadangabe wird im Ordner lang nach language_de.ini, language_en.ini usw. gesucht.
-# Wir kümmern uns im Code nicht weiter darum, welche Sprache nun zu lesen wäre.
-# Mit der Routine wird die Sprache direkt ins Template übernommen. Sollten wir trotzdem im Code eine brauchen, bekommen
-# wir auch noch einen Hash zurück.
 my %L = LoxBerry::System::readlanguage($template, "language.ini");
-
-my $lastdata;
-
-# ---------------------------------------------------
-# Save settings to config file
-# ---------------------------------------------------
-if ($R::btnSave)
-{
-	$pcfg->param('MIFLORA.ENABLED', $R::chkPluginEnabled);
-	$pcfg->param('MIFLORA.MINISERVER', $R::selMiniServer);
-	$pcfg->param('MIFLORA.UDPPORT', $R::txtMsUDPPort);
-	$pcfg->param('MIFLORA.POLLFREQUENCY', $R::selPollFrequency);
-	$pcfg->param('MIFLORA.LOCALTIME', $R::chkLocaltime);
-	$pcfg->param('MIFLORA.UDPENABLED', $R::chkUDPEnabled);
-  $pcfg->param('MIFLORA.MQTTENABLED', $R::chkMQTTEnabled);
-  $pcfg->param('MIFLORA.MQTTBROKER', $R::txtMQTTBroker);
-  $pcfg->param('MIFLORA.MQTTPORT', $R::txtMQTTPort);
-  $pcfg->param('MIFLORA.MQTTTOPIC', $R::txtMQTTTopic);
-  $pcfg->param('MIFLORA.MQTTUSERNAME', $R::txtMQTTUsername);
-  $pcfg->param('MIFLORA.MQTTPASSWORD', $R::txtMQTTPassword);
-
-	$pcfg->save();
-}
-
-
-# ---------------------------------------------------
-# Start manual poll
-# ---------------------------------------------------
-if ($R::btnPoll)
-{
-	print "DEBUG: manual poll $lbpbindir/miflora.py";
-
-	system("(/usr/bin/python3 -u $lbpbindir/miflora.py --configfile $lbpconfigdir/miflora.cfg --logfile $lbplogdir/xiaomi-miflora.log) &");
-
-	if (-e "$lbpdatadir/lastdata.dat")
-	{
-		open my $lastdatahandle, '>', "$lbpdatadir/lastdata.dat" or die "Can't open file $!";
-
-		$lastdata = $L{'MIFLORA.txtPollingMessage'};
-
-		print $lastdatahandle $L{'MIFLORA.txtPollingMessage'};
-
-		close $lastdatahandle;
-	}
-}
-
-else
-{
-	# ---------------------------------------------------
-	# Read last data if exists
-	# ---------------------------------------------------
-	
-
-	if (-e "$lbpdatadir/lastdata.dat")
-	{
-		open my $lastdatahandle, '<', "$lbpdatadir/lastdata.dat" or die "Can't open file $!";
-
-		$lastdata = do { local $/; <$lastdatahandle> };
-	}
-}
-
-
-
-
-# ---------------------------------------------------
-# Control for "frmStart" Form
-# ---------------------------------------------------
-my $frmStart = $cgi->start_form(
-      -name    => 'MiFloraPlugIn',
-      -method => 'POST',
-  );
-$template->param( frmStart => $frmStart );
-
-
-# ---------------------------------------------------
-# Control for "frmEnd" Form
-# ---------------------------------------------------
-my $frmEnd = $cgi->end_form();
-$template->param( frmEnd => $frmEnd );
-
-
-# ---------------------------------------------------
-# Control for "chkPluginEnabled" Flipswitch
-# ---------------------------------------------------
-@values = ('0', '1');
-%labels = (
-      '1' => 'On',
-      '0' => 'Off',
-  );
-my $chkPluginEnabled = $cgi->popup_menu(
-      -name    => 'chkPluginEnabled',
-      -values  => \@values,
-      -labels  => \%labels,
-      -default => $pcfg->param('MIFLORA.ENABLED')
-  );
-$template->param( chkPluginEnabled => $chkPluginEnabled );
-
-
-# ---------------------------------------------------
-# Control for "selMiniServer" Dropdown
-# ---------------------------------------------------
 my %miniservers = LoxBerry::System::get_miniservers();
-
-my @miniserverarray;
-my %miniserverhash;
-my $i = 1;
-
-foreach my $ms (sort keys %miniservers)
-{
-	push @miniserverarray, "MINISERVER$ms";
-
-	$miniserverhash{"MINISERVER$ms"} = $miniservers{$ms}{Name};
-
-	$i++;
+my @errors;
+my $message = "";
+my %fields = (
+    chkPluginEnabled => ['ENABLED', '1'],
+    selPollFrequency => ['POLLFREQUENCY', '12'],
+    chkLocaltime => ['LOCALTIME', '1'],
+    selBTAdapter => ['BTADAPTER', 'default'],
+    chkMQTTEnabled => ['MQTTENABLED', '1'],
+    txtMQTTBroker => ['MQTTBROKER', 'localhost'],
+    txtMQTTPort => ['MQTTPORT', '1883'],
+    txtMQTTTopic => ['MQTTTOPIC', 'miflora'],
+    txtMQTTUsername => ['MQTTUSERNAME', ''],
+    txtMQTTPassword => ['MQTTPASSWORD', ''],
+    chkUDPEnabled => ['UDPENABLED', '0'],
+    selMiniServer => ['MINISERVER', 'MINISERVER1'],
+    txtMsUDPPort => ['UDPPORT', '5006'],
+);
+my %values;
+foreach my $field (keys %fields) {
+    my ($key, $default) = @{$fields{$field}};
+    my $saved = $pcfg->param("MIFLORA.$key");
+    $saved = join(',', @$saved) if ref($saved) eq 'ARRAY';
+    $values{$field} = defined $saved ? $saved : $default;
 }
 
-my $selMiniServer = $cgi->popup_menu(
-      -name    => 'selMiniServer',
-      -values  => \@miniserverarray,
-      -labels  => \%miniserverhash,
-      -default => $pcfg->param('MIFLORA.MINISERVER'),
-  );
-$template->param( selMiniServer => $selMiniServer );
+my @adapters;
+if (open(my $inventory, '-|', '/usr/bin/python3', "$lbpbindir/miflora.py", '--list-adapters')) {
+    my $json = do { local $/; <$inventory> };
+    if (close($inventory)) {
+        my $decoded = eval { decode_json($json) };
+        if ($@ || ref($decoded) ne 'ARRAY') {
+            push @errors, $L{'MIFLORA.errAdapterInventory'};
+        } else {
+            @adapters = @$decoded;
+        }
+    } else {
+        push @errors, $L{'MIFLORA.errAdapterInventory'};
+    }
+} else {
+    push @errors, $L{'MIFLORA.errAdapterInventory'};
+}
 
+my @adapter_ids = ('default', 'serial', 'usb');
+my %adapter_labels = (
+    default => $L{'MIFLORA.adapterDefault'},
+    serial => $L{'MIFLORA.adapterSerial'},
+    usb => $L{'MIFLORA.adapterUSB'},
+);
+foreach my $kind ('default', 'serial', 'usb') {
+    my ($match) = grep {
+        $kind eq 'default' ? $_->{id} eq 'hci0' : $_->{kind} eq $kind
+    } @adapters;
+    $adapter_labels{$kind} .= " - " . ($match ? $match->{label} : $L{'MIFLORA.adapterMissing'});
+}
+foreach my $adapter (@adapters) {
+    push @adapter_ids, $adapter->{id};
+    $adapter_labels{$adapter->{id}} = $adapter->{label};
+}
 
-# ---------------------------------------------------
-# Control for "txtMsUDPPort" Textfield
-# ---------------------------------------------------
-my $txtMsUDPPort = $cgi->textfield(
-      -name    => 'txtMsUDPPort',
-      -default => $pcfg->param('MIFLORA.UDPPORT'),
-  );
-$template->param( txtMsUDPPort => $txtMsUDPPort );
+if ($cgi->request_method eq 'POST' && $cgi->param('btnSave')) {
+    my @validation_errors;
+    foreach my $field (keys %fields) {
+        $values{$field} = scalar($cgi->param($field)) // '';
+        push @validation_errors, $L{'MIFLORA.errInvalidInput'} if $values{$field} =~ /[\r\n\0]/;
+    }
+    foreach my $field ('chkPluginEnabled', 'chkLocaltime', 'chkMQTTEnabled', 'chkUDPEnabled') {
+        push @validation_errors, $L{'MIFLORA.errInvalidInput'} unless $values{$field} =~ /\A[01]\z/;
+    }
+    push @validation_errors, $L{'MIFLORA.errInvalidInput'}
+        unless $values{selPollFrequency} =~ /\A(?:1|2|4|8|12|24)\z/;
+    push @validation_errors, $L{'MIFLORA.errInvalidInput'}
+        unless $values{selBTAdapter} =~ /\A(?:default|serial|usb|hci[0-9]+)\z/;
+    push @validation_errors, $L{'MIFLORA.errOutputRequired'}
+        if $values{chkMQTTEnabled} ne '1' && $values{chkUDPEnabled} ne '1';
+    if ($values{chkMQTTEnabled} eq '1') {
+        push @validation_errors, $L{'MIFLORA.errMQTT'}
+            if $values{txtMQTTBroker} !~ /\S/
+            || $values{txtMQTTTopic} !~ /[^\/\s]/
+            || $values{txtMQTTTopic} =~ /[+#]/;
+        push @validation_errors, $L{'MIFLORA.errPort'} unless valid_port($values{txtMQTTPort});
+    }
+    if ($values{chkUDPEnabled} eq '1') {
+        push @validation_errors, $L{'MIFLORA.errPort'} unless valid_port($values{txtMsUDPPort});
+        my $server = $values{selMiniServer};
+        $server =~ s/^MINISERVER//;
+        push @validation_errors, $L{'MIFLORA.errMiniserver'} unless exists $miniservers{$server};
+    }
+    if (@validation_errors) {
+        push @errors, @validation_errors;
+    } else {
+        foreach my $field (keys %fields) {
+            $pcfg->param("MIFLORA.$fields{$field}[0]", $values{$field});
+        }
+        local $Config::Simple::USEQQ = 1;
+        if ($pcfg->save()) {
+            $message = $L{'MIFLORA.msgSaved'};
+        } else {
+            push @errors, $L{'MIFLORA.errSave'};
+        }
+    }
+}
 
+if (!exists $adapter_labels{$values{selBTAdapter}}) {
+    push @adapter_ids, $values{selBTAdapter};
+    $adapter_labels{$values{selBTAdapter}} = "$values{selBTAdapter} - $L{'MIFLORA.adapterMissing'}";
+}
 
-# ---------------------------------------------------
-# Control for "txtMQTTBroker" Textfield
-# ---------------------------------------------------
-my $txtMQTTBroker = $cgi->textfield(
-      -name    => 'txtMQTTBroker',
-      -default => $pcfg->param('MIFLORA.MQTTBROKER'),
-  );
-$template->param( txtMQTTBroker => $txtMQTTBroker );
+if ($cgi->request_method eq 'POST' && $cgi->param('btnPoll')) {
+    my $pid = fork();
+    if (!defined $pid) {
+        push @errors, $L{'MIFLORA.errPoll'};
+    } elsif ($pid == 0) {
+        setsid() >= 0 or die "Cannot detach MiFlora poll: $!";
+        open(STDIN, '<', '/dev/null') or die $!;
+        open(STDOUT, '>>', "$lbplogdir/xiaomi-miflora.log") or die $!;
+        open(STDERR, '>&', \*STDOUT) or die $!;
+        exec('/bin/sh', "$lbpbindir/run.sh",
+            '--configfile', "$lbpconfigdir/miflora.cfg",
+            '--logfile', "$lbplogdir/xiaomi-miflora.log",
+            '--datafile', "$lbpdatadir/lastdata.dat");
+        die "Cannot start MiFlora poll: $!";
+    } else {
+        $message = $L{'MIFLORA.txtPollingMessage'};
+    }
+}
 
-
-# ---------------------------------------------------
-# Control for "txtMQTTPort" Textfield
-# ---------------------------------------------------
-my $txtMQTTPort = $cgi->textfield(
-      -name    => 'txtMQTTPort',
-      -default => $pcfg->param('MIFLORA.MQTTPORT'),
-  );
-$template->param( txtMQTTPort => $txtMQTTPort );
-
-# ---------------------------------------------------
-# Control for "txtMQTTTopic" Textfield
-# ---------------------------------------------------
-my $txtMQTTTopic = $cgi->textfield(
-      -name    => 'txtMQTTTopic',
-      -default => $pcfg->param('MIFLORA.MQTTTOPIC'),
-  );
-$template->param( txtMQTTTopic => $txtMQTTTopic );
-
-# ---------------------------------------------------
-# Control for "txtMQTTUsername" Textfield
-# ---------------------------------------------------
-my $txtMQTTUsername = $cgi->textfield(
-      -name    => 'txtMQTTUsername',
-      -default => $pcfg->param('MIFLORA.MQTTUSERNAME'),
-  );
-$template->param( txtMQTTUsername => $txtMQTTUsername );
-
-# ---------------------------------------------------
-# Control for "txtMQTTPassword" Textfield
-# ---------------------------------------------------
-my $txtMQTTPassword = $cgi->password_field(
-      -name    => 'txtMQTTPassword',
-      -default => $pcfg->param('MIFLORA.MQTTPASSWORD'),
-  );
-$template->param( txtMQTTPassword => $txtMQTTPassword );
-
-
-# ---------------------------------------------------
-# Control for "chkLocaltime" Flipswitch
-# ---------------------------------------------------
-@values = ('0', '1' );
-%labels = (
-      '1' => 'On',
-      '0' => 'Off',
-  );
-my $chkLocaltime = $cgi->popup_menu(
-      -name    => 'chkLocaltime',
-      -values  => \@values,
-      -labels  => \%labels,
-      -default => $pcfg->param('MIFLORA.LOCALTIME')
-  );
-$template->param( chkLocaltime => $chkLocaltime );
-
-
-# ---------------------------------------------------
-# Control for "btnSave" Button
-# ---------------------------------------------------
-my $btnSave = $cgi->submit(
-      -name    => 'btnSave',
-      -value => $L{'MIFLORA.btnSave'},
-  );
-$template->param( btnSave => $btnSave );
-
-
-# ---------------------------------------------------
-# Control for "btnPoll" Button
-# ---------------------------------------------------
-my $btnPoll = $cgi->submit(
-      -name    => 'btnPoll',
-      -value => $L{'MIFLORA.btnPoll'},
-  );
-$template->param( btnPoll => $btnPoll );
-
-
-# ---------------------------------------------------
-# Control for "selPollFrequency" Dropdown
-# ---------------------------------------------------
-@values = ('1', '2', '4', '8', '12', '24' );
-%labels = (
-      '1' => $L{'MIFLORA.selPollFrequency1h'},
-      '2' => $L{'MIFLORA.selPollFrequency2h'},
-      '4' => $L{'MIFLORA.selPollFrequency4h'},
-      '8' => $L{'MIFLORA.selPollFrequency8h'},
-      '12' => $L{'MIFLORA.selPollFrequency12h'},
-      '24' => $L{'MIFLORA.selPollFrequency24h'},
-  );
-my $selPollFrequency = $cgi->popup_menu(
-      -name    => 'selPollFrequency',
-      -values  => \@values,
-      -labels  => \%labels,
-      -default => $pcfg->param('MIFLORA.POLLFREQUENCY'),
-  );
-$template->param( selPollFrequency => $selPollFrequency );
-
-
-# ---------------------------------------------------
-# Control for "chkUDPEnabled" Flipswitch
-# ---------------------------------------------------
-@values = ('0', '1');
-%labels = (
-      '1' => 'On',
-      '0' => 'Off',
-  );
-my $chkUDPEnabled = $cgi->popup_menu(
-      -name    => 'chkUDPEnabled',
-      -values  => \@values,
-      -labels  => \%labels,
-      -default => $pcfg->param('MIFLORA.UDPENABLED')
-  );
-$template->param( chkUDPEnabled => $chkUDPEnabled );
-
-# ---------------------------------------------------
-# Control for "chkMQTTEnabled" Flipswitch
-# ---------------------------------------------------
-@values = ('0', '1');
-%labels = (
-      '1' => 'On',
-      '0' => 'Off',
-  );
-my $chkMQTTEnabled = $cgi->popup_menu(
-      -name    => 'chkMQTTEnabled',
-      -values  => \@values,
-      -labels  => \%labels,
-      -default => $pcfg->param('MIFLORA.MQTTENABLED')
-  );
-$template->param( chkMQTTEnabled => $chkMQTTEnabled );
-
-# ---------------------------------------------------
-# Control for "txtLastData" Textarea
-# ---------------------------------------------------
-my $txtLastData = $cgi->textarea(
-      -name    => 'txtLastData',
-      -rows	   => 10,
-	  -columns => 50,
-      -default => "$lastdata"
-  );
-$template->param( txtLastData => $txtLastData );
-
-
-# ---------------------------------------------------
-# Control for "btnRefresh" Button
-# ---------------------------------------------------
-my $btnRefresh = $cgi->defaults(
-      -name    => 'btnRefresh',
-      -value => $L{'MIFLORA.btnRefresh'},
-  );
-$template->param( btnRefresh => $btnRefresh );
-
-
-# ---------------------------------------------------
-# Localized Labels from language.ini
-# ---------------------------------------------------
-$template->param( lblPluginEnabled => $L{'MIFLORA.lblPluginEnabled'} );
-$template->param( lblMiniServer => $L{'MIFLORA.lblMiniServer'} );
-$template->param( lblMsUDPPort => $L{'MIFLORA.lblMsUDPPort'}  );
-$template->param( lblPollFrequency => $L{'MIFLORA.lblPollFrequency'}  );
-$template->param( lblLastData => $L{'MIFLORA.lblLastData'}  );
-$template->param( lblLocaltime => $L{'MIFLORA.lblLocaltime'}  );
-$template->param( lblUDPEnabled => $L{'MIFLORA.lblUDPEnabled'} );
-$template->param( lblMQTTEnabled => $L{'MIFLORA.lblMQTTEnabled'} );
-$template->param( lblMQTTBroker => $L{'MIFLORA.lblMQTTBroker'} );
-$template->param( lblMQTTPort => $L{'MIFLORA.lblMQTTPort'} );
-$template->param( lblMQTTTopic => $L{'MIFLORA.lblMQTTTopic'} );
-$template->param( lblMQTTUsername => $L{'MIFLORA.lblMQTTUsername'} );
-$template->param( lblMQTTPassword => $L{'MIFLORA.lblMQTTPassword'} );
-
-# Nun wird das Template ausgegeben.
+$template->param(frmStart => $cgi->start_form(-name => 'MiFloraPlugin', -method => 'POST'));
+$template->param(frmEnd => $cgi->end_form());
+foreach my $field ('chkPluginEnabled', 'chkMQTTEnabled', 'chkUDPEnabled', 'chkLocaltime') {
+    $template->param($field => $cgi->popup_menu(
+        -name => $field, -id => $field, -values => ['0', '1'],
+        -labels => {'0' => 'Off', '1' => 'On'}, -default => $values{$field}, -override => 1,
+    ));
+}
+foreach my $field ('txtMQTTBroker', 'txtMQTTPort', 'txtMQTTTopic', 'txtMQTTUsername', 'txtMsUDPPort') {
+    $template->param($field => $cgi->textfield(
+        -name => $field, -id => $field, -default => $values{$field}, -override => 1,
+    ));
+}
+$template->param(txtMQTTPassword => $cgi->password_field(
+    -name => 'txtMQTTPassword', -id => 'txtMQTTPassword',
+    -default => $values{txtMQTTPassword}, -override => 1,
+));
+$template->param(selBTAdapter => $cgi->popup_menu(
+    -name => 'selBTAdapter', -id => 'selBTAdapter', -values => \@adapter_ids,
+    -labels => \%adapter_labels, -default => $values{selBTAdapter}, -override => 1,
+));
+my @servers = map { "MINISERVER$_" } sort keys %miniservers;
+my %server_labels = map { ("MINISERVER$_" => $miniservers{$_}{Name}) } keys %miniservers;
+$template->param(selMiniServer => $cgi->popup_menu(
+    -name => 'selMiniServer', -id => 'selMiniServer', -values => \@servers,
+    -labels => \%server_labels, -default => $values{selMiniServer}, -override => 1,
+));
+my %frequency_labels = map { ($_ => $L{"MIFLORA.selPollFrequency${_}h"}) } (1, 2, 4, 8, 12, 24);
+$template->param(selPollFrequency => $cgi->popup_menu(
+    -name => 'selPollFrequency', -id => 'selPollFrequency', -values => [1, 2, 4, 8, 12, 24],
+    -labels => \%frequency_labels, -default => $values{selPollFrequency}, -override => 1,
+));
+foreach my $button ('btnSave', 'btnPoll') {
+    $template->param($button => $cgi->submit(-name => $button, -value => $L{"MIFLORA.$button"}));
+}
+$template->param(btnRefresh => $cgi->submit(-name => 'btnRefresh', -value => $L{'MIFLORA.btnRefresh'}));
+my $lastdata = "";
+if (-e "$lbpdatadir/lastdata.dat") {
+    open(my $handle, '<', "$lbpdatadir/lastdata.dat") or die "Cannot read last data: $!";
+    $lastdata = do { local $/; <$handle> };
+    close($handle);
+}
+$template->param(txtLastData => $cgi->textarea(
+    -name => 'txtLastData', -id => 'txtLastData', -rows => 12, -columns => 60,
+    -readonly => 'readonly', -default => $lastdata, -override => 1,
+));
+foreach my $key (keys %L) {
+    if ($key =~ /^MIFLORA\.(.+)$/) {
+        $template->param($1 => $L{$key});
+    }
+}
+$template->param(adapters => [map { {label => $_->{label}} } @adapters]);
+$template->param(errors => [map { {error => $_} } @errors], message => $message);
 print $template->output();
-  
-# Schlussendlich lassen wir noch den Footer ausgeben.
 LoxBerry::Web::lbfooter();
+
+sub valid_port {
+    my ($port) = @_;
+    return $port =~ /\A[0-9]+\z/ && $port >= 1 && $port <= 65535;
+}
