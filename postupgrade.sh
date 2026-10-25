@@ -61,16 +61,23 @@ echo "<INFO> Plugin Log folder (on RAMDISK!) is: $PLOG"
 echo "<INFO> Plugin CONFIG folder is: $PCONFIG"
 
 echo "<INFO> Copy back existing config files"
-cp -v -r /tmp/uploads/$PTEMPDIR/_upgrade/config/* $PCONFIG/
+if ! cp -v -r "/tmp/uploads/$PTEMPDIR/_upgrade/config/." "$PCONFIG/"; then
+    echo "<FAIL> Cannot restore the existing MiFlora configuration."
+    exit 2
+fi
 
 echo "<INFO> Adding new config parameters"
-grep -q -F "UDPENABLED=" $PCONFIG/miflora.cfg || echo "UDPENABLED=1" >> $PCONFIG/miflora.cfg 
-grep -q -F "MQTTENABLED=" $PCONFIG/miflora.cfg || echo "MQTTENABLED=0" >> $PCONFIG/miflora.cfg
-grep -q -F "MQTTBROKER=" $PCONFIG//miflora.cfg || echo "MQTTBROKER=localhost" >> $PCONFIG/miflora.cfg
-grep -q -F "MQTTPORT=" $PCONFIG/miflora.cfg || echo "MQTTPORT=1883" >> $PCONFIG/miflora.cfg
-grep -q -F "MQTTTOPIC=" $PCONFIG/miflora.cfg || echo "MQTTTOPIC=miflora" >> $PCONFIG/miflora.cfg
-grep -q -F "MQTTUSERNAME=" $PCONFIG/miflora.cfg || echo "MQTTUSERNAME=loxberry" >> $PCONFIG/miflora.cfg
-grep -q -F "MQTTPASSWORD=" $PCONFIG/miflora.cfg || echo "MQTTPASSWORD=secretPassword" >> $PCONFIG/miflora.cfg
+# Preserve existing transport choices, including UDP-only installations.
+for entry in \
+    "BTADAPTER=default" "UDPENABLED=1" "MQTTENABLED=0" \
+    "MQTTBROKER=localhost" "MQTTPORT=1883" "MQTTTOPIC=miflora" \
+    "MQTTUSERNAME=" "MQTTPASSWORD="
+do
+    key=${entry%%=*}
+    if ! grep -q -E "^[[:space:]]*$key[[:space:]]*=" "$PCONFIG/miflora.cfg"; then
+        printf '\n%s\n' "$entry" >> "$PCONFIG/miflora.cfg" || exit 2
+    fi
+done
 
 echo "<INFO> Copy back existing log files"
 cp -v -r /tmp/uploads/$PTEMPDIR/_upgrade/log/* $PLOG/

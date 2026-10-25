@@ -1,122 +1,174 @@
-# Loxberry Plugin: Xiaomi MiFlora Flower Sensor
+# LoxBerry Plugin: Xiaomi MiFlora Flower Sensor
 
-This Plugin queries the Xiaomi MiFlora Flower Sensors via bluetooth low energy (btle) and sends the data via UDP and MQTT (experimental support) to the Loxone Miniserver.
+Reads Xiaomi MiFlora / Flower Care and Flower Mate sensors using **Bleak and
+the standard BlueZ D-Bus API**. Onboard Bluetooth (including Raspberry Pi UART
+controllers) and USB Bluetooth adapters are supported. No bluepy, btlewrap,
+raw HCI sockets, root polling or `setcap` are required.
 
-<img src="https://raw.githubusercontent.com/michaelmiklis/loxberry-plugin-miflora/assets/plugin.png" height="600" alt="Xiaomi MiFlora Plugin"/>
+**MQTT is the primary transport.** UDP remains available alongside MQTT or on
+its own. Existing MQTT topics, UDP payloads and hourly polling intervals are
+preserved.
 
-The Xiaomi MiFlora Plugin supports multiple flower sensors. During each execution a bluetooth scan for Xiaomi MiFlora devices is performed and each found device will be queried.
+## Requirements and installation
 
-## UDP Mode (default)
+- Linux with **Python 3.9 or later** and **BlueZ 5.55 or later**, for example a
+  current LoxBerry installation based on Debian 11 or newer. Older LoxBerry
+  images must be upgraded first; the installer reports unsupported runtimes.
+- A powered, unblocked Bluetooth LE adapter, with the `bluetooth` service running.
+- Internet access during installation to install the Python dependencies.
 
-Each received value will be send as an individual UDP packet. The UDP packets will have the following format:
+The installer installs BlueZ, D-Bus and Python venv support, starts BlueZ and
+creates a plugin-local `bin/venv` with Bleak and paho-mqtt. It does not modify
+system Python packages or remove old shared bluepy installations. Polling
+runs as the normal LoxBerry user through BlueZ's standard system-bus policy.
+Systems with custom D-Bus restrictions must permit that user to communicate
+with `org.bluez`.
 
-[Device-MAC].[Sensor-Name]=[Value]
+## Settings
 
-Sample:
+The settings page follows the TeslaCmd layout, with separate sections and
+inline help for general scheduling, Bluetooth, MQTT, optional UDP and diagnostics.
+Save settings before using **Poll now**.
 
+### Bluetooth adapter
+
+The selection and inventory are ported from the sysfs-based adapter logic in
+[Jan21493/LoxBerry-Plugin-TeslaCmd](https://github.com/Jan21493/LoxBerry-Plugin-TeslaCmd),
+`webfrontend/htmlauth/tesla_inc.php`, commit
+`49cc2c3598a3b3e5d7c6f7b8c24b214170671d51` (Apache-2.0, see
+[LICENSE.md](LICENSE.md)). The Python port shares one implementation between the
+web UI and poller, uses sysfs product/manufacturer and USB chip IDs for the
+inventory, and does not use TeslaCmd's legacy `hciconfig` diagnostics.
+
+| Selection | Behaviour |
+| --- | --- |
+| Default | Use `hci0`, matching the previous plugin behaviour. |
+| Onboard / UART | First onboard/UART controller in natural hci-number order. |
+| USB | First USB controller in natural hci-number order. |
+| Specific `hciX` | Use exactly that controller, useful with multiple USB adapters. |
+
+Installed adapters are listed with their hci ID, bus type, available product,
+chip and address information. Unplugged selections remain visible. A missing
+selected adapter fails explicitly; there is **no fallback** to another controller.
+Type-based selection handles changes in hci numbering after reboots; explicit
+hci IDs follow the OS numbering, not a persistent physical-device identity.
+An internally mounted USB controller is classified as USB, not UART.
+
+Both discovery and GATT reads use the selected controller. Sensors are read
+sequentially, with up to three bounded attempts per sensor. Errors on one sensor
+do not prevent other sensors from being read. A process lock prevents cron and
+manual polls from overlapping. The hourly cron checks the configured interval;
+it is not a continuously running daemon.
+
+### MQTT (default for new installations)
+
+Configure the broker host, port (default `1883`), topic prefix (default `miflora`)
+and optional credentials. A broker such as the LoxBerry MQTT Gateway can be
+used; no Miniserver configuration is needed for MQTT-only operation.
+
+Each value is published separately with **QoS 1**, waiting for connection and
+publish acknowledgements before disconnecting. QoS 1 can deliver duplicates;
+messages are not retained. Connection/authentication/publish failures are
+reported in the plugin log and latest-data display, and return a failing exit
+code. If UDP is also enabled, its delivery is attempted independently.
+
+```text
+miflora/c47c8d66275b/temperature  27.1
+miflora/c47c8d66275b/moisture    4
+```
+
+The topic is `<prefix>/<MAC without colons>/<sensor name>`, entirely lowercase
+as in previous releases. Wildcards (`+`, `#`) are not valid in the prefix.
+Username and password may be empty for a broker without authentication.
+MQTT uses plain TCP, **not TLS**; use it only on a trusted network.
+
+### UDP (optional)
+
+Enable UDP and select a Miniserver configured in LoxBerry plus its virtual UDP
+input port (default `5006`). Each value is a separate datagram in the unchanged
+format `<MAC without colons>.<SensorName>=<Value>`:
+
+```text
+C47C8D66275B.Temperature=27.1
 C47C8D66275B.Moisture=4
-C47C8D66275B.Light=136
+```
 
-The UDP packages will be sent as follows:
+Both `general.json` and legacy `general.cfg` Miniserver configuration files are
+supported. Neither is read when UDP is disabled. UDP has no delivery
+acknowledgements.
 
-<img src="https://raw.githubusercontent.com/michaelmiklis/loxberry-plugin-miflora/assets/udp-monitor.png" alt="UDP-Monitor" height="300"/>
+### Upgrading existing installations
 
-With the following command recognition the values can be assigend to a "UDP-Command" / virtual input:
+Existing settings and credentials are preserved, including UDP-only or
+MQTT-disabled configurations. MQTT is **not silently enabled** during an
+upgrade. `BTADAPTER=default` is added for compatibility with the previous
+`hci0` behaviour. Switch to MQTT and select the desired adapter in the settings
+page when ready. Fresh installs enable MQTT and disable UDP.
 
-<img src="https://raw.githubusercontent.com/michaelmiklis/loxberry-plugin-miflora/assets/command.png" alt="UDP-Befehl" width="350" />
+## Sensor values
 
-## MQTT Mode (Experimental Support)
+| Sensor name | Description | Example |
+| --- | --- | --- |
+| Name | Sensor name | Flower care |
+| PollTime | Seconds since 2009-01-01, with optional local-time offset | 297370058 |
+| PollTimeString | Local date/time string | 03.06.2018 18:47:38 |
+| Firmware | Firmware version | 2.7.0 |
+| Temperature | Degrees Celsius | 27.1 |
+| Moisture | Percent | 4 |
+| Light | Lux | 136 |
+| Conductivity | µS/cm | 0 |
+| Battery | Percent | 86 |
 
-Starting in version 2.0.4 the Xiaomi MiFlora Flower Sensor Plugin also supports MQTT for sending data to the Loxone Miniserver. This requires the MQTT Gateway Plugin to be installed and successfully configured.
-Further documentation and improvements on MQTT will be added in future releases.
+Firmware 2.6.6 and newer is switched to live-data mode before reading. GATT
+characteristic UUIDs replace the old fixed ATT handles. Invalid or incomplete
+sensor responses are reported instead of being published as zero values.
 
-## Sensor data
+## Troubleshooting
 
-| Sensor Name             | Description                | Sample value            |
-| ----------------------- | -------------------------- | ----------------------- |
-| Name                    | Name of the sensor         | Flower care             |
-| PollTime                | Date/Time in Loxone format | 297370058               |
-| PollTimeString          | Date/Time string           | 03.06.2018 18:47:38     |
-| Firmware                | Firmware version           | 2.7.0                   |
-| Temperature             | Temperature in Celcius     | 27.1                    |
-| Moisture                | Moisture (unknown unit)    | 4                       |
-| Light                   | Light (unknown unit)       | 136                     |
-| Conductivity            | Conductivity (unknown unit)| 0                       |
-| Battery                 | Battery level in percent   | 86                      |
+Check **Polling and diagnostics** in the settings page and the plugin log
+`xiaomi-miflora.log`. A scan takes ten seconds; retries and multiple sensors can
+make the full poll take several minutes. Refresh the page to see the results.
 
-## Troubleshooting and feedback
+On the LoxBerry host (adjust paths if the plugin has a different folder):
 
-If you have any issues you can run the plugin manually from the Loxberry command line (SSH) using the following command:
+```sh
+systemctl status bluetooth
+bluetoothctl list
+bluetoothctl show
+/usr/bin/python3 /opt/loxberry/bin/plugins/xiaomi-miflora/miflora.py --list-adapters
+/bin/sh /opt/loxberry/bin/plugins/xiaomi-miflora/run.sh \
+  --configfile /opt/loxberry/config/plugins/xiaomi-miflora/miflora.cfg \
+  --logfile /opt/loxberry/log/plugins/xiaomi-miflora/xiaomi-miflora.log \
+  --datafile /opt/loxberry/data/plugins/xiaomi-miflora/lastdata.dat --debug
+```
 
-`/usr/bin/python3 /opt/loxberry/bin/plugins/xiaomi-miflora/miflora.py`
+If no adapter appears, check the USB connection, OS driver, firmware and
+Bluetooth blocking state (`rfkill list`). If a powered-off controller is shown,
+power on the intended controller using the OS Bluetooth tools. The plugin does
+not reset adapters or restart drivers automatically. Check batteries and range
+if discovery finds no sensors. D-Bus permission errors require checking the
+host's BlueZ policy; do not run the poller as root or restore raw-socket caps.
 
-If the above command does NOT find you Xiaomi Flower Sensors proceed with the following steps to find the cause:
+## Development
 
-### Step 1: Are the sensors are discoverable by the OS?
+On Linux, install `bin/requirements.txt` into a virtual environment and run:
 
-Test if the bluetooth stack from Raspbian can find the devices:
+```sh
+python3 -m unittest discover -s tests -v
+```
 
-`hcitool lescan (must be executed as root)`
+The tests mock BlueZ/BLE and MQTT; actual controller discovery, GATT reads and
+LoxBerry web rendering still need verification on a LoxBerry host with sensors.
 
-If your device is not found - it seems to be a low-level problem either with the bluetooth device, your raspbian drivers, bluetooth chip, e.g.
-Please understand that I cannot provide support for these kind of problems as they are not related to the plugin.
+## Feedback and history
 
-### Step 2: Are the sesnors are discoverable by the Python btle-wrapper?
+[LoxForum discussion](https://www.loxforum.com/forum/projektforen/loxberry/plugins/156917-plugin-xiaomi-miflora-flower-monitor)
 
-Start the btle-wrapper (called bluepy-helper). This module makes the bluetooth stack available in python3.
-
-`./usr/local/lib/python3.7/dist-packages/bluepy/bluepy-helper`
-
-Enter `scan` and check the output if your devices are listed here (rsp=$scanaddr=b{YOUR DEVICE ID}type)
-
-If your device is not found or any module-errors are shown it seems to be a problem with the bluepy python3 moduel. Check the version and try to manually reinstall the module:
-
-`pip3 show bluepy`
-`apt-get install --no-install-recommends --reinstall python3-pip`
-
-Please understand that I cannot provide support for these kind of problems as they are not related to the plugin.
-
-### Step 3: Discover using pyhton3 script blescan
-
-To start a discovery of the BLE devices using blescan.py execute the following command:
-
-`python3 /usr/local/bin/blescan`
-
-If your device is not found - it seems to be a problem with the bluepy python3 module.
-Check the developers page <https://github.com/IanHarvey/bluepy> for further assistance.
-
-### Step 4: Check Logfile in Loxberry WebUI
-
-Navigate to "Log Manager" -> "More Logfiles" -> "Xiaomi Flower Monitor (Plugin Log)" and check the logfile for error messages.
-
-### Step 5: Execute plugin locally using SSH connection
-
-Open an SSH connection to your Loxberry and execute the following command:
-
-`python3 /usr/bin/python3 /opt/loxberry/bin/plugins/xiaomi-miflora/miflora.py --logfile=/opt/loxberry/log/plugins/xiaomi-miflora/xiaomi-miflora.log --configfile=/opt/loxberry/config/plugins/xiaomi-miflora/miflora.cfg`
-
-If python specific errors occur, they will be displayed in the console.
-
-### Step 6: All of the above worked correctly, but the plugin still fails
-
-Post an issue on my GitHub Page or in the Loxberry Forum.
-<https://www.loxforum.com/forum/projektforen/loxberry/plugins/156917-plugin-xiaomi-miflora-flower-monitor>
-
-## Feedback & Discussion
-
-This plugin will be improved over time and feedback is appreciated. Therefore I created a thread in the LoxForum:
-
-<https://www.loxforum.com/forum/projektforen/loxberry/plugins/156917-plugin-xiaomi-miflora-flower-monitor>
-
-## Change-Log
-
-- 2022-02-13 Release 2.0.4 - Added MQTT experimental MQTT functionality
-- 2021-08-01 Release 2.0.3 - Fixed issue in WebUI with On/Off switches
-- 2020-01-05 Release 2.0.2 - Fixed issue with btlewrap __init__
-- 2019-12-31 Release 2.0.1 - Support for Loxberry 2.0.0.4 and above
-- 2018-06-18 Release 1.0.1 - Fixed typo in postroot.sh install script
-- 2018-06-04 Release 1.0.0 - Initial release of version 1.0.0
-
-## Known-Issues
-
-- No logging
+- 3.0.0: Bleak/BlueZ D-Bus, shared adapter inventory/selection, MQTT-first
+  defaults, acknowledged MQTT delivery and structured bilingual settings.
+- 2022-02-13: 2.0.4, initial experimental MQTT support.
+- 2021-08-01: 2.0.3, WebUI switch fix.
+- 2020-01-05: 2.0.2, btlewrap initialization fix.
+- 2019-12-31: 2.0.1, LoxBerry 2 support.
+- 2018-06-18: 1.0.1, installation fix.
+- 2018-06-04: 1.0.0, initial release.

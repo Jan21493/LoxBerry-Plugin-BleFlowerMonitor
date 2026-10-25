@@ -61,13 +61,26 @@ echo "<INFO> Plugin Log folder (on RAMDISK!) is: $PLOG"
 echo "<INFO> Plugin CONFIG folder is: $PCONFIG"
 
 
-# install additional python3 libaries
-pip3 install setuptools
-pip3 install bluepy
-pip3 install btlewrap
-
-# set permissions for bluetooth bluepy-library
-setcap 'cap_net_raw,cap_net_admin+eip' /usr/local/lib/python3.7/dist-packages/bluepy/bluepy-helper
+# Bleak uses BlueZ's system D-Bus policy; no raw sockets, sudo or setcap.
+if ! /usr/bin/python3 -c 'import sys; sys.exit(sys.version_info < (3, 9))'; then
+    echo "<FAIL> MiFlora requires Python 3.9 or newer. Please upgrade LoxBerry / Debian."
+    exit 2
+fi
+BLUEZ_VERSION=$(dpkg-query -W -f='${Version}' bluez) || exit 2
+if ! dpkg --compare-versions "$BLUEZ_VERSION" ge 5.55; then
+    echo "<FAIL> MiFlora requires BlueZ 5.55 or newer."
+    exit 2
+fi
+if ! systemctl enable --now bluetooth.service; then
+    echo "<FAIL> Cannot start the BlueZ Bluetooth service."
+    exit 2
+fi
+echo "<INFO> Installing Bleak and MQTT in the plugin's isolated Python environment."
+if ! /usr/bin/python3 -m venv "$PBIN/venv" ||
+   ! "$PBIN/venv/bin/python3" -m pip install --disable-pip-version-check -r "$PBIN/requirements.txt"; then
+    echo "<FAIL> Cannot install the MiFlora Python dependencies."
+    exit 2
+fi
 
 
 # Exit with Status 0

@@ -1,521 +1,243 @@
-#!/usr/bin/python3
-# encoding=utf-8
+#!/usr/bin/env python3
+"""Poll MiFlora over BlueZ D-Bus and publish via MQTT and optional UDP."""
 
-# 2018-07-03 Michael Miklis (michaelmiklis.de)
-
-
-import time
-import configparser
-import json
-import sys
-import socket
-import time
-import os
-import random
 import argparse
+import asyncio
+import configparser
+import fcntl
+import json
 import logging
-
-from btlewrap import available_backends, BluepyBackend
-
-from paho.mqtt import client as mqtt_client
-
-from miflora.miflora_poller import MiFloraPoller, MI_CONDUCTIVITY, MI_MOISTURE, MI_LIGHT, MI_TEMPERATURE, MI_BATTERY
-from miflora import miflora_scanner
-
-
-def main(args):
-    """
-    Check if running in debug mode
-    """
-    if args.debug:
-        import debugpy
-        print("running in debug mode - waiting for debugger connection on {0}:{1}".format(args.debugip, args.debugport))
-        debugpy.listen((args.debugip, args.debugport))
-        debugpy.wait_for_client()
-
-    """
-    # Parse PlugIn config file
-    """
-    if not os.path.exists(args.configfile):
-        logging.critical("Plugin configuration file missing {0}".format(args.configfile))
-        sys.exit(-1)
-
-    pluginconfig = configparser.ConfigParser()
-    pluginconfig.read(args.configfile)
-    enabled = pluginconfig.get('MIFLORA', 'ENABLED')
-    miniservername = pluginconfig.get('MIFLORA', 'MINISERVER')
-    virtualUDPPort = int(pluginconfig.get('MIFLORA', 'UDPPORT'))
-    pollFrequency = int(pluginconfig.get('MIFLORA', 'POLLFREQUENCY'))
-    localtime = pluginconfig.get('MIFLORA', 'LOCALTIME')
-    scanTimeout = 10
-    udpenabled = pluginconfig.get('MIFLORA', 'UDPENABLED')
-    mqttenabled = pluginconfig.get('MIFLORA', 'MQTTENABLED')
-    mqttbroker = pluginconfig.get('MIFLORA', 'MQTTBROKER')
-    mqttport = int(pluginconfig.get('MIFLORA', 'MQTTPORT'))
-    mqtttopic = pluginconfig.get('MIFLORA', 'MQTTTOPIC')
-    mqttusername = pluginconfig.get('MIFLORA', 'MQTTUSERNAME')
-    mqttpassword = pluginconfig.get('MIFLORA', 'MQTTPASSWORD')
-
-    mqttclient_id = "loxberry-miflora-{0}".format(random.randint(0, 1000))
-
-    """
-    transistion from general.cfg to general.json
-    """
-    if miniservername.startswith("MINISERVER"):
-        miniserverID = miniservername.replace("MINISERVER", "")
-
-    else:
-        miniserverID = miniservername
-        miniservername = "MINISERVER{0}".format(miniserverID)
-
-    """
-    check if general.json exists and Loxberry version > 2.2
-    """
-    lbsConfigGeneralJSON = os.path.join(
-        Config.Loxberry("LBSCONFIG"), "general.json")
-    lbsConfigGeneralCFG = os.path.join(
-        Config.Loxberry("LBSCONFIG"), "general.cfg")
-
-    if not os.path.exists(lbsConfigGeneralJSON):
-        logging.warning("gerneral.json missing in path {0}".format(lbsConfigGeneralJSON))
-        logging.warning("trying general.cfg instead {0}".format(lbsConfigGeneralCFG))
-
-        if not os.path.exists(lbsConfigGeneralCFG):
-            logging.critical("general.cfg not found in path {0}".format(lbsConfigGeneralCFG))
-            sys.exit(-1)
-
-        """
-        general.cfg (legacy configuration file)
-        """
-        logging.info("using system configuration file {0}/general.cfg".format(Config.Loxberry("LBSCONFIG")))
-        loxberryconfig = configparser.ConfigParser()
-        loxberryconfig.read("{0}/general.cfg".format(Config.Loxberry("LBSCONFIG")))
-        miniserverIP = loxberryconfig.get(miniservername, 'IPADDRESS')
-
-    else:
-        with open(lbsConfigGeneralJSON, "r") as lbsConfigGeneralJSONHandle:
-            logging.info("using system configuration file {0}/general.json".format(Config.Loxberry("LBSCONFIG")))
-            data = json.load(lbsConfigGeneralJSONHandle)
-
-        # check if miniserver from plugin config exists in general.json
-        if not miniserverID in data["Miniserver"].keys():
-            logging.critical("Miniserver with id {0} not found general.json - please check plugin configuration".format(miniserverID))
-            sys.exit(-1)
-
-        miniserverIP = data["Miniserver"][miniserverID]["Ipaddress"]
-        logging.info("Miniserver ip address: {0}".format(miniserverIP))
-
-    """
-    global variables
-    """
-    lastdatafile = '{0}/{1}/{2}'.format(Config.Loxberry("LBPDATA"), "xiaomi-miflora", "lastdata.dat")
-
-    """
-    exit if PlugIn is not enabled
-    """
-    if enabled != "1":
-        logging.warning("Plugin is not enabled in configuration - exiting")
-        sys.exit(-1)
-
-    """
-    if called with argument "daemon"
-    """
-    if args.daemon:
-
-        # check if it is time to run - otherwise exit
-        if (int(time.strftime("%H")) / pollFrequency).is_integer() == False:
-            sys.exit(-1)
-
-    """
-    MQTT connect
-    """
-    if mqttenabled == "1":
-        mqttclient = connect_mqtt(mqttbroker, mqttport, mqttclient_id, mqttusername, mqttpassword)
-
-    # ---------------------------------------------
-    # scan for Xiaomi MiFlora device
-    # ---------------------------------------------
-    logging.info('Scanning for Xiaomi MiFlora devices (takes up to {0} seconds)'.format(scanTimeout))
-
-    devices = miflora_scanner.scan(BluepyBackend, scanTimeout)
-
-    logging.info('Found {0} devices:'.format(len(devices)))
-
-    if len(devices) >= 1:
-        """
-        delete cached data file
-        """
-        if os.path.isfile(lastdatafile):
-            os.remove(lastdatafile)
-
-    """
-    get data for each found sensor
-    """
-    for device in devices:
-        devicemac = device.replace(":", "")
-
-        logging.info('Polling device: {0}'.format(device))
-
-        poller = MiFloraPoller(device, BluepyBackend)
-
-        """
-        Name
-        """
-        # build value string
-        value = poller.name()
-
-        # log data
-        logging.info("{0}.{1}={2}".format(devicemac, "Name", value))
-
-        # write value to lastdata.dat
-        writelastdata(lastdatafile, "{0}.{1}={2}".format(devicemac, "Name", value))
-
-        # send value as udp datagram
-        if udpenabled == "1":
-            sendudp("{0}.{1}={2}".format(devicemac, "Name", value), miniserverIP, virtualUDPPort)
-
-        # publish MQTT topic
-        if mqttenabled == "1":
-            publish(mqttclient, "{0}/{1}/{2}".format(mqtttopic, devicemac, "Name"), value)
-
-        """
-        PollTime
-        """
-        # Calculate offset based on 01.01.2009
-        loxBaseEpoch = 1230768000
-
-        # Use current time as polling time
-        pollTime = int(time.time())
-
-        # Convert time to localtime if enabled
-        if localtime == "1":
-            pollLocalTime = time.localtime(pollTime)
-
-            pollTime = pollTime + pollLocalTime.tm_gmtoff
-
-        # Subtract time / date offset
-        loxSensorTime = pollTime - loxBaseEpoch
-
-        # build value strings
-        value = "{0}.{1}={2}".format(devicemac, "PollTime", loxSensorTime)
-
-        # log data
-        logging.info(value)
-
-        # write value to lastdata.dat
-        writelastdata(lastdatafile, value)
-
-        # send value as udp datagram
-        if udpenabled == "1":
-            sendudp(value, miniserverIP, virtualUDPPort)
-
-        # publish MQTT topic
-        if mqttenabled == "1":
-            publish(mqttclient, "{0}/{1}/{2}".format(mqtttopic, devicemac, "PollTime"), loxSensorTime)
-
-        """
-        PollTimeString
-        """
-        # Use current time as polling time
-        timestamp = time.strftime(
-            "%d.%m.%Y %H:%M:%S", time.localtime(time.time()))
-
-        # build value strings
-        value = "{0}.{1}={2}".format(devicemac, "PollTimeString", timestamp)
-
-        # log data
-        logging.info(value)
-
-        # write value to lastdata.dat
-        writelastdata(lastdatafile, value)
-
-        # send value as udp datagram
-        if udpenabled == "1":
-            sendudp(value, miniserverIP, virtualUDPPort)
-
-        # publish MQTT topic
-        if mqttenabled == "1":
-            publish(mqttclient, "{0}/{1}/{2}".format(mqtttopic, devicemac, "PollTimeString"), timestamp)
-
-        # -------------------------------
-        # Firmware
-        # -------------------------------
-        # build value string
-        value = poller.firmware_version()
-
-        # log data
-        logging.info("{0}.{1}={2}".format(devicemac, "Firmware", value))
-
-        # write value to lastdata.dat
-        writelastdata(lastdatafile, "{0}.{1}={2}".format(devicemac, "Firmware", value))
-
-        # send value as udp datagram
-        if udpenabled == "1":
-            sendudp("{0}.{1}={2}".format(devicemac, "Firmware", value), miniserverIP, virtualUDPPort)
-
-        # publish MQTT topic
-        if mqttenabled == "1":
-            publish(mqttclient, "{0}/{1}/{2}".format(mqtttopic, devicemac, "Firmware"), value)
-
-        # -------------------------------
-        # Temperature
-        # -------------------------------
-        # build value string
-        value = poller.parameter_value(MI_TEMPERATURE)
-
-        # log data
-        logging.info("{0}.{1}={2}".format(devicemac, "Temperature", value))
-
-        # write value to lastdata.dat
-        writelastdata(lastdatafile, "{0}.{1}={2}".format(devicemac, "Temperature", value))
-
-        # send value as udp datagram
-        if udpenabled == "1":
-            sendudp("{0}.{1}={2}".format(devicemac, "Temperature", value), miniserverIP, virtualUDPPort)
-
-        # publish MQTT topic
-        if mqttenabled == "1":
-            publish(mqttclient, "{0}/{1}/{2}".format(mqtttopic, devicemac, "Temperature"), value)
-
-        # -------------------------------
-        # Moisture
-        # -------------------------------
-        # build value string
-        value = poller.parameter_value(MI_MOISTURE)
-
-        # log data
-        logging.info("{0}.{1}={2}".format(devicemac, "Moisture", value))
-
-        # write value to lastdata.dat
-        writelastdata(lastdatafile, "{0}.{1}={2}".format(devicemac, "Moisture", value))
-
-        # send value as udp datagram
-        if udpenabled == "1":
-            sendudp("{0}.{1}={2}".format(devicemac, "Moisture", value), miniserverIP, virtualUDPPort)
-
-        # publish MQTT topic
-        if mqttenabled == "1":
-            publish(mqttclient, "{0}/{1}/{2}".format(mqtttopic, devicemac, "Moisture"), value)
-
-        # -------------------------------
-        # Light
-        # -------------------------------
-        # build value string
-        value = poller.parameter_value(MI_LIGHT)
-
-        # log data
-        logging.info("{0}.{1}={2}".format(devicemac, "Light", value))
-
-        # write value to lastdata.dat
-        writelastdata(lastdatafile, "{0}.{1}={2}".format(devicemac, "Light", value))
-
-        # send value as udp datagram
-        if udpenabled == "1":
-            sendudp("{0}.{1}={2}".format(devicemac, "Light", value), miniserverIP, virtualUDPPort)
-
-        # publish MQTT topic
-        if mqttenabled == "1":
-            publish(mqttclient, "{0}/{1}/{2}".format(mqtttopic, devicemac, "Light"), value)
-
-        # -------------------------------
-        # Conductivity
-        # -------------------------------
-        # build value string
-        value = poller.parameter_value(MI_CONDUCTIVITY)
-
-        # log data
-        logging.info("{0}.{1}={2}".format(devicemac, "Conductivity", value))
-
-        # write value to lastdata.dat
-        writelastdata(lastdatafile, "{0}.{1}={2}".format(devicemac, "Conductivity", value))
-
-        # send value as udp datagram
-        if udpenabled == "1":
-            sendudp("{0}.{1}={2}".format(devicemac, "Conductivity", value), miniserverIP, virtualUDPPort)
-
-        # publish MQTT topic
-        if mqttenabled == "1":
-            publish(mqttclient, "{0}/{1}/{2}".format(mqtttopic, devicemac, "Conductivity"), value)
-
-        # -------------------------------
-        # Battery
-        # -------------------------------
-        # build value string
-        value = poller.parameter_value(MI_BATTERY)
-
-        # log data
-        logging.info("{0}.{1}={2}".format(devicemac, "Battery", value))
-
-        # write value to lastdata.dat
-        writelastdata(lastdatafile, "{0}.{1}={2}".format(devicemac, "Battery", value))
-
-        # send value as udp datagram
-        if udpenabled == "1":
-            sendudp("{0}.{1}={2}".format(devicemac, "Battery", value), miniserverIP, virtualUDPPort)
-
-        # publish MQTT topic
-        if mqttenabled == "1":
-            publish(mqttclient, "{0}/{1}/{2}".format(mqtttopic, devicemac, "Battery"), value)
-
-        logging.info("-------------------------------------------------")
-
-    # exit with errorlevel 0
-    sys.exit(0)
-
-# _______________________________________________________________________________________
-
-
-def writelastdata(filename, data):
-    lastdatahandle = open(filename, 'a')
-    lastdatahandle.write("{0}\n".format(data))
-    lastdatahandle.close()
-
-# _______________________________________________________________________________________
-
-
-def publish(client, topic, msg):
-
-    result = client.publish(topic.lower(), msg)
-
-    if result[0] == 0:
-        logging.info("Send {0} to topic {1}".format(msg, topic))
-    else:
-        logging.error("Failed to send message to topic {0}".format(topic))
-
-# _______________________________________________________________________________________
-
-
-class Config:
-    __loxberry = {
-        "LBSCONFIG": os.getenv("LBSCONFIG", os.getcwd()),
-        "LBPDATA": os.getenv("LBPDATA", os.getcwd()),
+from logging.handlers import RotatingFileHandler
+import os
+from pathlib import Path
+import socket
+import sys
+import threading
+import time
+
+from miflora.adapters import detect_adapters, inventory, select_adapter
+
+
+def read_config(filename):
+    config = configparser.ConfigParser(interpolation=None)
+    if not config.read(filename):
+        raise ValueError(f"Plugin configuration file missing: {filename}")
+    settings = config["MIFLORA"]
+    # Config::Simple quotes and escapes punctuation when saving the web form.
+    for key, value in settings.items():
+        if value.startswith('"') and value.endswith('"'):
+            settings[key] = json.loads(value)
+    for key, default in (
+        ("ENABLED", "1"), ("LOCALTIME", "1"),
+        ("MQTTENABLED", "1"), ("UDPENABLED", "0"),
+    ):
+        if settings.get(key, default) not in {"0", "1"}:
+            raise ValueError(f"{key} must be 0 or 1")
+    if settings.getint("POLLFREQUENCY", 12) not in {1, 2, 4, 8, 12, 24}:
+        raise ValueError("Invalid polling frequency")
+    if settings.get("MQTTENABLED", "1") == "1":
+        if not settings.get("MQTTBROKER", "").strip():
+            raise ValueError("MQTT broker is required")
+        topic = settings.get("MQTTTOPIC", "miflora")
+        if not topic.strip("/ \t") or any(char in topic for char in "+#\0"):
+            raise ValueError("MQTT topic must be nonempty and contain no wildcards")
+        check_port(settings.getint("MQTTPORT", 1883))
+    if settings.get("UDPENABLED", "0") == "1":
+        check_port(settings.getint("UDPPORT", 5006))
+    return settings
+
+
+def check_port(port):
+    if not 1 <= port <= 65535:
+        raise ValueError("Port must be between 1 and 65535")
+
+
+def miniserver_address(settings, directory):
+    """Only UDP requires a LoxBerry Miniserver configuration."""
+    server_id = settings.get("MINISERVER", "MINISERVER1").removeprefix("MINISERVER")
+    directory = Path(directory)
+    if (directory / "general.json").exists():
+        with (directory / "general.json").open() as handle:
+            servers = json.load(handle)["Miniserver"]
+        if server_id not in servers:
+            raise ValueError(f"Miniserver {server_id} not found in general.json")
+        return servers[server_id]["Ipaddress"]
+    config = configparser.ConfigParser(interpolation=None)
+    if not config.read(directory / "general.cfg"):
+        raise ValueError("UDP enabled but no LoxBerry Miniserver configuration found")
+    return config.get(f"MINISERVER{server_id}", "IPADDRESS")
+
+
+def timestamp_values(localtime):
+    now = time.time()
+    offset = time.localtime(now).tm_gmtoff if localtime else 0
+    return {
+        "PollTime": int(now) + offset - 1230768000,
+        "PollTimeString": time.strftime("%d.%m.%Y %H:%M:%S", time.localtime(now)),
     }
 
-    @staticmethod
-    def Loxberry(name):
-        return Config.__loxberry[name]
 
-# _______________________________________________________________________________________
+def mqtt_publish(settings, samples):
+    """Wait for CONNACK and every QoS 1 acknowledgement before disconnecting."""
+    from paho.mqtt import client as mqtt
 
+    connected = threading.Event()
+    connection_error = []
 
-def connect_mqtt(broker, port, client_id, username, password):
-    def on_connect(client, userdata, flags, rc):
-        if rc == 0:
-            logging.info("Connected to MQTT Broker!")
-        else:
-            logging.error("Failed to connect, return code {0}".format(rc))
+    def on_connect(client, userdata, flags, reason_code, properties):
+        if reason_code.is_failure:
+            connection_error.append(str(reason_code))
+        connected.set()
 
-    # Set Connecting Client ID
-    client = mqtt_client.Client(client_id)
-    client.username_pw_set(username, password)
+    client = mqtt.Client(mqtt.CallbackAPIVersion.VERSION2)
+    client.connect_timeout = 10
     client.on_connect = on_connect
-    client.connect(broker, port)
-
-    return client
-
-# _______________________________________________________________________________________
-
-
-def sendudp(data, destip, destport):
-    # start a new connection udp connection
-    connection = socket.socket(socket.AF_INET,     # Internet
-                               socket.SOCK_DGRAM)  # UDP
-
-    # send udp datagram
-    res = connection.sendto(data.encode(), (destip, destport))
-
-    # close udp connection
-    connection.close()
-
-    # check if all bytes in resultstr were sent
-    if res != data.encode().__len__():
-        logging.error("Sent bytes do not match - expected {0} : got {1}".format(data.__len__(), res))
-        logging.error("Packet-Payload {0}".format(data))
-        sys.exit(-1)
-
-# _______________________________________________________________________________________
+    if settings.get("MQTTUSERNAME", ""):
+        client.username_pw_set(settings["MQTTUSERNAME"], settings.get("MQTTPASSWORD", ""))
+    try:
+        client.connect(settings["MQTTBROKER"], settings.getint("MQTTPORT", 1883))
+        client.loop_start()
+        if not connected.wait(10):
+            raise TimeoutError("MQTT broker did not acknowledge connection")
+        if connection_error:
+            raise ConnectionError(f"MQTT connection rejected: {connection_error[0]}")
+        for address, values in samples:
+            for key, value in values.items():
+                # Keep the topic format and lowercasing used by earlier releases.
+                topic = f"{settings.get('MQTTTOPIC', 'miflora')}/{address}/{key}".lower()
+                message = client.publish(topic, str(value), qos=1)
+                if message.rc != mqtt.MQTT_ERR_SUCCESS:
+                    raise ConnectionError(f"MQTT publish failed for {topic}: {message.rc}")
+                message.wait_for_publish(timeout=10)
+                if not message.is_published():
+                    raise TimeoutError(f"MQTT publish acknowledgement missing for {topic}")
+        logging.info("MQTT delivery acknowledged for %s sensor(s)", len(samples))
+    finally:
+        client.disconnect()
+        client.loop_stop()
 
 
-# parse args and call main function
-print('Number of arguments:', len(sys.argv), 'arguments.')
-print('Argument List:', str(sys.argv))
+def udp_publish(settings, samples, host):
+    with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as connection:
+        connection.settimeout(10)
+        for address, values in samples:
+            for key, value in values.items():
+                payload = f"{address}.{key}={value}".encode()
+                if connection.sendto(payload, (host, settings.getint("UDPPORT", 5006))) != len(payload):
+                    raise OSError("Incomplete UDP datagram")
+
+
+async def poll(settings, datafile):
+    from bleak.exc import BleakError
+    from miflora.miflora_poller import read_sample
+    from miflora.miflora_scanner import scan
+
+    adapter = select_adapter(settings.get("BTADAPTER", "default"), detect_adapters())
+    logging.info("Scanning with %s using Bleak / BlueZ D-Bus", adapter)
+    datafile.write_text(f"Polling via {adapter} (Bleak / BlueZ D-Bus)...\n")
+    devices = await scan(adapter)
+    samples = []
+    errors = []
+    for device in devices:
+        try:
+            values = await read_sample(device)
+            values.update(timestamp_values(settings.get("LOCALTIME", "1") == "1"))
+            samples.append((device.address.replace(":", "").upper(), values))
+        except (BleakError, OSError, asyncio.TimeoutError, ValueError) as error:
+            logging.error("Cannot poll %s: %s", device.address, error)
+            errors.append(f"ERROR {device.address}: {error}")
+
+    lines = [
+        f"{address}.{key}={value}"
+        for address, values in samples for key, value in values.items()
+    ]
+    if not devices:
+        lines.append("No MiFlora sensors found. Check range, batteries and adapter selection.")
+        logging.warning(lines[-1])
+    datafile.write_text("\n".join(lines + errors) + "\n")
+    for line in lines:
+        logging.info(line)
+
+    if samples and settings.get("MQTTENABLED", "1") == "1":
+        try:
+            await asyncio.to_thread(mqtt_publish, settings, samples)
+        except (OSError, ValueError, RuntimeError) as error:
+            logging.error("MQTT delivery failed: %s", error)
+            errors.append(f"ERROR MQTT: {error}")
+            with datafile.open("a") as handle:
+                handle.write(errors[-1] + "\n")
+    if samples and settings.get("UDPENABLED", "0") == "1":
+        try:
+            host = miniserver_address(settings, os.environ.get("LBSCONFIG", "."))
+            await asyncio.to_thread(udp_publish, settings, samples, host)
+        except (OSError, ValueError, KeyError, configparser.Error) as error:
+            logging.error("UDP delivery failed: %s", error)
+            errors.append(f"ERROR UDP: {error}")
+            with datafile.open("a") as handle:
+                handle.write(errors[-1] + "\n")
+    return 1 if errors else 0
+
+
+def run(args):
+    settings = read_config(args.configfile)
+    if settings.get("ENABLED", "1") != "1":
+        logging.info("Plugin disabled")
+        return 0
+    if args.daemon and int(time.strftime("%H")) % settings.getint("POLLFREQUENCY", 12):
+        return 0
+    if settings.get("MQTTENABLED", "1") != "1" and settings.get("UDPENABLED", "0") != "1":
+        raise ValueError("Enable at least one output: MQTT or UDP")
+    configfile = Path(args.configfile).resolve()
+    datafile = Path(args.datafile) if args.datafile else (
+        Path(os.environ["LBPDATA"]) / configfile.parent.name / "lastdata.dat"
+        if "LBPDATA" in os.environ else configfile.parent / "lastdata.dat"
+    )
+    datafile.parent.mkdir(parents=True, exist_ok=True)
+    with (datafile.parent / ".poll.lock").open("a") as lock:
+        try:
+            fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            logging.warning("A MiFlora poll is already running")
+            return 0
+        from bleak.exc import BleakError
+        try:
+            return asyncio.run(poll(settings, datafile))
+        except (BleakError, OSError, ValueError, RuntimeError) as error:
+            datafile.write_text(f"ERROR: {error}\n")
+            logging.exception("Bluetooth polling failed: %s", error)
+            return 1
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--configfile", default="miflora.cfg")
+    parser.add_argument("--logfile", default="xiaomi-miflora.log")
+    parser.add_argument("--datafile")
+    parser.add_argument("--daemon", action="store_true")
+    parser.add_argument("--list-adapters", action="store_true", help="Print sysfs adapter inventory as JSON")
+    parser.add_argument("--debug", action="store_true", help="Enable detailed logging")
+    args = parser.parse_args()
+    if args.list_adapters:
+        try:
+            print(json.dumps(inventory()))
+            return 0
+        except OSError as error:
+            print(f"Cannot enumerate Bluetooth adapters: {error}", file=sys.stderr)
+            return 1
+    logging.basicConfig(
+        level=logging.DEBUG if args.debug else logging.INFO,
+        format="%(asctime)s %(levelname)s %(message)s",
+        handlers=[
+            RotatingFileHandler(args.logfile, maxBytes=1024 * 1024, backupCount=1),
+            logging.StreamHandler(),
+        ],
+    )
+    try:
+        return run(args)
+    except (OSError, ValueError, KeyError, RuntimeError, configparser.Error, ImportError) as error:
+        logging.exception("MiFlora poll failed: %s", error)
+        return 1
+
 
 if __name__ == "__main__":
-    """
-    Parse commandline arguments
-    """
-    parser = argparse.ArgumentParser(
-        description="Loxberry Xiaomi Miflora Plugin. More information can be found on Github site https://github.com/michaelmiklis/loxberry-plugin-miflora")
-
-    debugroup = parser.add_argument_group("debug")
-
-    debugroup.add_argument("--debug",
-                           dest="debug",
-                           default=False,
-                           action="store_true",
-                           help="enable debug mode")
-
-    debugroup.add_argument("--debugip",
-                           dest="debugip",
-                           default=socket.gethostbyname(socket.gethostname()),
-                           action="store",
-                           help="Local IP address to listen for debugger connections (default={0})".format(socket.gethostbyname(socket.gethostname())))
-
-    debugroup.add_argument("--debugport",
-                           dest="debugport",
-                           default=5678,
-                           action="store",
-                           help="TCP port to listen for debugger connections (default=5678)")
-
-    loggroup = parser.add_argument_group("log")
-
-    loggroup.add_argument("--logfile",
-                          dest="logfile",
-                          default="xiaomi-miflora.log",
-                          type=str,
-                          action="store",
-                          help="specifies logfile path")
-
-    configgroup = parser.add_argument_group("config")
-
-    configgroup.add_argument("--configfile",
-                             dest="configfile",
-                             default="miflora.cfg",
-                             type=str,
-                             action="store",
-                             help="specifies plugin configuration file path")
-
-    daemongroup = parser.add_argument_group("daemon")
-
-    daemongroup.add_argument("--daemon",
-                             dest="daemon",
-                             default=False,
-                             action="store_true",
-                             help="Running in daemon mode (polling only with configured pollIntervall")
-
-    args = parser.parse_args()
-
-    """
-    # logging configuration
-    """
-    logging.getLogger().setLevel(logging.DEBUG)
-    logging.basicConfig(filename=args.logfile,
-                        filemode='w',
-                        level=logging.DEBUG,
-                        format='%(asctime)s %(name)-12s %(levelname)-8s %(message)s',
-                        datefmt='%Y-%m-%d %H:%M:%S',)
-
-    # define a Handler which writes INFO messages or higher to the sys.stderr
-    console = logging.StreamHandler()
-    console.setLevel(logging.NOTSET)
-    # add the handler to the root logger
-    logging.getLogger('').addHandler(console)
-    logging.info("using plugin log file {0}".format(args.logfile))
-
-    """
-    call main function
-    """
-    try:
-        main(args)
-    except Exception as e:
-        logging.critical(e, exc_info=True)
+    sys.exit(main())
