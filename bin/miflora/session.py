@@ -102,7 +102,7 @@ def poll_session(datafile, logfile, level=None):
     start = time.monotonic()
     outcome = {"status": "ERROR"}
     try:
-        datafile.write_text("")
+        datafile.write_text("", encoding="utf-8")
         logging.info("START %s - MiFlora scan starting", session_id, extra={"boundary": True})
         yield outcome
     finally:

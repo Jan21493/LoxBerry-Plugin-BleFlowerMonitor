@@ -32,8 +32,8 @@ spec.loader.exec_module(plugin)
 def settings(**changes):
     config = configparser.ConfigParser(interpolation=None)
     config.read(ROOT / "config/miflora.cfg")
-    config["MIFLORA"].update(changes)
-    return config["MIFLORA"]
+    config["FLOWERMON"].update(changes)
+    return config["FLOWERMON"]
 
 
 def sensor_data(**changes):
@@ -157,10 +157,21 @@ class BLETests(unittest.IsolatedAsyncioTestCase):
         factory.return_value.__aenter__ = AsyncMock(side_effect=start)
         factory.return_value.__aexit__ = AsyncMock(return_value=False)
         with patch.object(scanner, "BleakScanner", factory), patch.object(scanner.asyncio, "sleep", AsyncMock()):
-            found = await scanner.scan("hci2")
+            with self.assertLogs(level="INFO") as captured:
+                found = await scanner.scan("hci2")
         self.assertEqual(found, [named, device])
         self.assertEqual(factory.call_args.kwargs["adapter"], "hci2")
         self.assertEqual(factory.call_args.kwargs["bluez"]["adapter"], "hci2")
+        self.assertEqual(len(captured.records), 2)
+        self.assertTrue(all(record.levelname == "INFO" for record in captured.records))
+        self.assertTrue(any("Discovered" in record.message for record in captured.records))
+        self.assertTrue(any("approx. 1 m line of sight without walls" in record.message for record in captured.records))
+
+    def test_rssi_distance_is_documented_free_space_estimate(self):
+        self.assertEqual(scanner.estimate_distance_m(-59), 1)
+        self.assertEqual(scanner.estimate_distance_m(-79), 10)
+        self.assertEqual(scanner.estimate_distance_m(-94), 56)
+        self.assertIsNone(scanner.estimate_distance_m(None))
 
     async def test_gatt_reads_use_discovered_device_and_uuid(self):
         for firmware, writes in (("2.6.5", 0), ("2.6.6", 1), ("2.10.0", 1)):
@@ -176,10 +187,12 @@ class BLETests(unittest.IsolatedAsyncioTestCase):
                 factory.return_value.__aenter__ = AsyncMock(return_value=client)
                 factory.return_value.__aexit__ = AsyncMock(return_value=False)
                 with patch.object(poller, "BleakClient", factory), patch.object(poller.asyncio, "sleep", AsyncMock()):
-                    result = await poller.read_sample(device)
+                    with self.assertLogs(level="DEBUG") as captured:
+                        result = await poller.read_sample(device)
                 self.assertIs(factory.call_args.args[0], device)
                 self.assertEqual(result["Firmware"], firmware)
                 self.assertEqual(client.write_gatt_char.await_count, writes)
+                self.assertTrue(all(record.levelname == "DEBUG" for record in captured.records))
                 self.assertEqual(
                     [call.args[0] for call in client.read_gatt_char.await_args_list],
                     [
@@ -202,10 +215,24 @@ class BLETests(unittest.IsolatedAsyncioTestCase):
 
 
 class ConfigTests(unittest.TestCase):
+    def test_plugin_identity_uses_new_installation_namespace(self):
+        config = configparser.ConfigParser(interpolation=None)
+        config.optionxform = str
+        config.read(ROOT / "plugin.cfg")
+        self.assertEqual(config["PLUGIN"]["NAME"], "ble-flower-monitor")
+        self.assertEqual(config["PLUGIN"]["FOLDER"], "ble-flower-monitor")
+        self.assertEqual(config["PLUGIN"]["TITLE"], "BLE Flower Monitor")
+        self.assertEqual(config["AUTHOR"]["NAME"], "Jan W.")
+        for release in ("release.cfg", "prerelease.cfg"):
+            text = (ROOT / release).read_text()
+            self.assertIn("VERSION=3.0.1", text)
+            self.assertIn("jan21493/LoxBerry-Plugin-BleFlowerMonitor", text)
+
     def test_migration_persists_type_and_removes_old_plugin_credentials(self):
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "miflora.cfg"
             path.write_text((ROOT / "config/miflora.cfg").read_text().replace(
+                "[FLOWERMON]", "[MIFLORA]").replace(
                 "BTADAPTER=serial", "BTADAPTER=hci0") +
                 "\nMQTTBROKER=old-host\nMQTTPASSWORD=secret\n")
             with patch.object(plugin, "detect_adapters", return_value=[
@@ -216,6 +243,8 @@ class ConfigTests(unittest.TestCase):
             self.assertEqual(config["BTADAPTER"], "usb")
             self.assertNotIn("MQTTBROKER", path.read_text())
             self.assertNotIn("MQTTPASSWORD", path.read_text())
+            self.assertIn("[FLOWERMON]", path.read_text())
+            self.assertNotIn("[MIFLORA]", path.read_text())
             # Migration keeps upper-case INI keys for Config::Simple.
             self.assertIn("BTADAPTER = usb", path.read_text())
 
@@ -231,11 +260,16 @@ class ConfigTests(unittest.TestCase):
             self.assertEqual(path.read_text(), before)
 
     def test_new_defaults_and_password_percent(self):
+        config = configparser.ConfigParser(interpolation=None)
+        config.read(ROOT / "config/miflora.cfg")
+        self.assertIn("FLOWERMON", config)
+        self.assertNotIn("MIFLORA", config)
         self.assertEqual(settings()["MQTTENABLED"], "1")
         self.assertEqual(settings()["UDPENABLED"], "0")
+        self.assertEqual(settings()["MQTTTOPIC"], "flowermon")
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "miflora.cfg"
-            path.write_text((ROOT / "config/miflora.cfg").read_text().replace("MQTTTOPIC=miflora", "MQTTTOPIC=miflora%test"))
+            path.write_text((ROOT / "config/miflora.cfg").read_text().replace("MQTTTOPIC=flowermon", "MQTTTOPIC=miflora%test"))
             self.assertEqual(plugin.read_config(path)["MQTTTOPIC"], "miflora%test")
 
     def test_invalid_config_rejected(self):
@@ -245,7 +279,7 @@ class ConfigTests(unittest.TestCase):
         ):
             with self.subTest(changes=changes), tempfile.TemporaryDirectory() as directory:
                 config = configparser.ConfigParser()
-                config["MIFLORA"] = settings(**changes)
+                config["FLOWERMON"] = settings(**changes)
                 path = Path(directory) / "miflora.cfg"
                 with path.open("w") as handle:
                     config.write(handle)
@@ -272,6 +306,21 @@ class ConfigTests(unittest.TestCase):
             with patch.object(plugin.time, "strftime", return_value="01.01.2009 01:00:00"):
                 self.assertEqual(plugin.timestamp_values(True)["PollTime"], 3600)
                 self.assertEqual(plugin.timestamp_values(False)["PollTime"], 0)
+
+
+class LanguageTests(unittest.TestCase):
+    def test_web_language_keys_and_formatting_match(self):
+        import re
+        catalogs = []
+        for language in ("de", "en"):
+            config = configparser.ConfigParser(interpolation=None)
+            config.optionxform = str
+            config.read(ROOT / f"templates/lang/language_{language}.ini", encoding="utf-8")
+            catalogs.append(dict(config["FLOWERMON"]))
+        self.assertEqual(catalogs[0].keys(), catalogs[1].keys())
+        for key in catalogs[0]:
+            self.assertEqual(re.findall(r"</?(?:b|i|code)>", catalogs[0][key]),
+                             re.findall(r"</?(?:b|i|code)>", catalogs[1][key]), key)
 
 
 class RunTests(unittest.TestCase):
@@ -436,6 +485,37 @@ class SessionTests(unittest.TestCase):
 
 
 class NativeBridgeTests(unittest.TestCase):
+    def test_bridge_writes_umlauts_as_utf8(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "LoxBerry").mkdir()
+            (root / "LoxBerry/Log.pm").write_text(r'''
+package LoxBerry::Log;
+sub new { my ($class, %args) = @_; return bless \%args, $class; }
+sub INF { my ($self, $message) = @_; open(my $f, '>>:raw', $self->{filename}) or die $!; print $f $message, "\n"; close($f); }
+sub LOGSTART { shift->INF(@_); }
+sub LOGEND { shift->INF(@_); }
+1;
+''')
+            filename = root / "utf8.log"
+            with patch.dict(os.environ, {"PERL5LIB": str(root)}):
+                log = session.NativeLog(filename)
+                try:
+                    log.start("query")
+                    log.send("INF", "UTF-8 test: Wände, Größe")
+                    log.send("INF", "D-Bus: <dbus_fast.signature.Variant ('q', 13)>")
+                    log.send("INF", "Sensor name: </div><script>alert(1)</script>")
+                    log.end("OK")
+                finally:
+                    log.close()
+            content = filename.read_bytes()
+            self.assertIn("UTF-8 test: Wände, Größe", content.decode("utf-8"))
+            self.assertIn(b"W\xc3\xa4nde", content)
+            self.assertIn("D-Bus: (dbus_fast.signature.Variant ('q', 13))", content.decode("utf-8"))
+            self.assertIn("Sensor name: (/div)(script)alert(1)(/script)", content.decode("utf-8"))
+            self.assertNotIn(b"<", content)
+            self.assertNotIn(b">", content)
+
     def test_bridge_uses_loxberry_helper_and_finishes_session(self):
         process = MagicMock()
         process.stdout.readline.return_value = "READY\n"
@@ -630,7 +710,7 @@ class TransportTests(unittest.TestCase):
                 worker.join(timeout=7)
         self.assertFalse(worker.is_alive())
         self.assertEqual(broker_errors, [])
-        self.assertEqual(packets, [(b"miflora/c47c8d000001/temperature", b"27.1")])
+        self.assertEqual(packets, [(b"flowermon/c47c8d000001/temperature", b"27.1")])
 
 
 class PollTests(unittest.IsolatedAsyncioTestCase):
@@ -726,8 +806,10 @@ sub readlanguage {
     my ($template) = @_;
     open(my $handle, '<', "$lbptemplatedir/lang/language_en.ini") or die $!;
     my %language;
+    my $section = '';
     while (my $line = <$handle>) {
-        if ($line =~ /^(\w+)="(.*)"\s*$/) { $language{"MIFLORA.$1"} = $2; }
+        if ($line =~ /^\[(\w+)\]/) { $section = $1; next; }
+        if ($line =~ /^(\w+)="(.*)"\s*$/) { $language{"$section.$1"} = $2; }
     }
     return %language;
 }
@@ -736,7 +818,8 @@ sub get_miniservers { return (); }
 ''')
             (root / "LoxBerry/Web.pm").write_text(
                 "package LoxBerry::Web; sub lbheader {} sub lbfooter {} "
-                "sub loglist_html { my %p = @_; return '<div>Native log list: '.$p{NAME}.'</div>'; } 1;")
+                "sub loglist_html { my %p = @_; return '<div>Native log list: '.$p{NAME}."
+                "q{<a href='/admin/system/tools/logfile.cgi?logfile=plugins%2Ftest%2F20261027_000000_123_xiaomi-miflora.log&amp;format=template' target='_blank'>Logfile</a></div>}; } 1;")
             (root / "bin").mkdir()
             (root / "bin/miflora.py").write_text(
                 "print(" + repr(json.dumps([
@@ -761,11 +844,23 @@ sub get_miniservers { return (); }
             html = result.stdout.decode()
             self.assertIn("MQTT", html)
             self.assertIn("BlueZ D-Bus", html)
+            self.assertIn("<h1>BLE Flower Monitor</h1>", html)
+            self.assertIn("<b>HHCC Flower Care</b>", html)
+            self.assertIn("<b>&#39;MQTT Basics&#39;</b>", html)
+            self.assertIn("/&lt;MQTT prefix&gt;/&lt;MAC address&gt;/&lt;parameter&gt;", html)
+            self.assertIn("successor to Michael Miklis", html)
             self.assertIn("selBTAdapter", html)
             self.assertIn("Installed Bluetooth adapters", html)
             self.assertIn('<div class="miflora-save"><input', html)
             self.assertNotIn("ARRAY(", html)
             self.assertNotIn("<TMPL_", html)
+            self.assertIn("<h2>Send to Miniserver</h2>", html)
+            self.assertIn("<h3>MQTT (recommended)</h3>", html)
+            self.assertIn("<h3>UDP (alternative)</h3>", html)
+            for field in ("chkPluginEnabled", "selPollFrequency", "chkLocaltime", "selBTAdapter",
+                          "chkMQTTEnabled", "txtMQTTTopic", "chkUDPEnabled", "selMiniServer", "txtMsUDPPort"):
+                self.assertRegex(html, rf'<div class="miflora-field">\s*<label for="{field}">[^<]+</label>'
+                                       rf'\s*<div><(?:select|input)\b[^>]*\bid="{field}"')
             class Controls(HTMLParser):
                 def __init__(self):
                     super().__init__()
@@ -804,20 +899,32 @@ sub get_miniservers { return (); }
             status_html = status_page.stdout.decode()
             self.assertNotIn("Installed Bluetooth adapters", status_html)
             self.assertIn("Virtual inputs in Loxone Config", status_html)
-            self.assertIn("MQTT Gateway version 2 is selected.", status_html)
+            self.assertIn("MQTT Gateway version 2 is selected, great!", status_html)
+            for field in ("inputTransport",):
+                self.assertRegex(status_html, rf'<div class="miflora-field">\s*<label for="{field}">[^<]+</label>'
+                                              rf'\s*<div><(?:select|input)\b[^>]*\bid="{field}"')
+            self.assertIn('<label for="sensorSelect">Sensor MAC address</label>', status_html)
+            self.assertIn('id="clearOutput"', status_html)
+            self.assertIn('id="editMac"', status_html)
+            self.assertIn('5C:85:7E:B0:F3:AD (Example)', status_html)
+            self.assertRegex(status_html, r'<option value="mqtt" selected>MQTT \(recommended\)</option>')
+            self.assertRegex(status_html, r'<option value="udp">UDP</option>')
             self.assertIn("Resend all", status_html)
             self.assertIn("single dot (<code>.</code>)", status_html)
             self.assertIn("<code>\\.</code>", status_html)
             self.assertIn("<b><i>'Subscriptions'</i></b>", status_html)
             self.assertNotIn("&lt;b&gt;", status_html)
+            self.assertIn("°C", status_html)
+            self.assertIn("µS/cm", status_html)
             self.assertIn("virtual text input", status_html)
             self.assertNotIn('id="mqttSubscription"', status_html)
             self.assertNotIn('name="btnSave"', status_html)
             self.assertIn('id="dataAutoScroll"', status_html)
+            self.assertNotIn('name="btnRefresh"', status_html)
             status_controls = Controls()
             status_controls.feed(status_html)
             controls.inputs.update(status_controls.inputs)
-            for button in ("btnPoll", "btnRefresh"):
+            for button in ("btnPoll",):
                 self.assertEqual(controls.inputs[button]["type"], "submit")
                 self.assertEqual(controls.inputs[button]["data-inline"], "true")
             form = dict(btnSave="Save", chkPluginEnabled="1", selPollFrequency="4", chkLocaltime="1",
@@ -857,18 +964,14 @@ sub get_miniservers { return (); }
                 self.assertEqual(result.returncode, 0, result.stderr.decode())
                 self.assertIn('role="alert"', result.stdout.decode())
                 self.assertEqual(configfile.read_text(), before)
-            for button in ("btnRefresh", "btnPoll"):
-                (root / "lastdata.dat").write_text("latest sensor values")
+            for button in ("btnPoll",):
                 payload = urlencode({button: controls.inputs[button]["value"]})
                 result = subprocess.run(["perl", str(ROOT / "webfrontend/htmlauth/index.cgi")],
                                         input=payload.encode(), env=dict(env, QUERY_STRING="tab=status", CONTENT_LENGTH=str(len(payload))),
                                         capture_output=True)
                 self.assertEqual(result.returncode, 0, result.stderr.decode())
                 self.assertEqual(configfile.read_text(), before)
-                if button == "btnRefresh":
-                    self.assertIn("latest sensor values", result.stdout.decode())
-                else:
-                    self.assertIn("Starting scan", result.stdout.decode())
+                self.assertIn("Starting scan", result.stdout.decode())
                 if button == "btnPoll":
                     import time
                     for _ in range(100):
@@ -889,25 +992,56 @@ sub get_miniservers { return (); }
                 (2, "4.0.1.1", True, False),
                 ("2", "4.0.1.1", True, False),
                 (1, "4.0.1.1", False, True),
+                (None, "4.0.1.1", False, True),
                 (None, "3.0.0", False, False),
                 (1, "3.0.0", False, False),
+                (2, "3.0.0", False, False),
             ):
-                generalfile.write_text(json.dumps({"Base": {"Version": lbversion},
-                                                  "Mqtt": {"Gatewayversion": version, "Brokerhost": "localhost"}}))
+                mqtt = {"Brokerhost": "localhost"}
+                if version is not None:
+                    mqtt["Gatewayversion"] = version
+                generalfile.write_text(json.dumps({"Base": {"Version": lbversion}, "Mqtt": mqtt}))
                 page = endpoint("tab=status")
                 self.assertEqual('id="mqttSubscription"' in page, not v2)
                 self.assertEqual("Resend all" in page, v2)
                 self.assertEqual("recommended for efficiency" in page, recommendation)
+                summary = page.split('<p class="miflora-gateway-status">', 1)[1].split("</p>", 1)[0]
+                self.assertIn("MQTT configuration found", summary)
+                self.assertEqual("MQTT Gateway version 2" in summary, lbversion.startswith("4."))
+                if v2 or recommendation:
+                    self.assertLess(summary.index("MQTT configuration found"), summary.index("MQTT Gateway version 2"))
+                self.assertLess(page.index("MQTT configuration found"),
+                                page.index("<ol>") if v2 else page.index('id="mqttSubscription"'))
                 self.assertIn('id="udpHelp" hidden', page)
             generalfile.write_text("invalid")
             self.assertIn("Could not read the MQTT Gateway version", endpoint("tab=status"))
             generalfile.write_text(json.dumps({"Mqtt": {}}))
             self.assertIn("No MQTT broker configuration found", endpoint("tab=status"))
+            generalfile.write_text(json.dumps({"Base": {"Version": "4.0.1.1"},
+                                              "Mqtt": {"Gatewayversion": 2}}))
+            page = endpoint("tab=status")
+            summary = page.split('<p class="miflora-gateway-status">', 1)[1].split("</p>", 1)[0]
+            self.assertIn("No MQTT broker configuration found", summary)
+            self.assertIn('style="color:red"', summary)
+            self.assertIn("MQTT Gateway version 2 is selected", summary)
+            configfile.write_text(configfile.read_text().replace("MQTTENABLED=1", "MQTTENABLED=0")
+                                  .replace("UDPENABLED=0", "UDPENABLED=1"))
+            udp_status = endpoint("tab=status")
+            self.assertRegex(udp_status, r'<option value="mqtt">MQTT \(recommended\)</option>')
+            self.assertRegex(udp_status, r'<option value="udp" selected>UDP</option>')
+            configfile.write_text(configfile.read_text().replace("MQTTENABLED=0", "MQTTENABLED=1")
+                                  .replace("UDPENABLED=1", "UDPENABLED=0"))
             logpage = endpoint("tab=logs")
             self.assertIn("Native log list: FlowerCare", logpage)
             self.assertNotIn('id="sessionSelect"', logpage)
             self.assertNotIn('id="selLogLevel"', logpage)
             self.assertNotIn('name="btnLogSave"', logpage)
+            filename = "20261027_000000_123_xiaomi-miflora.log"
+            self.assertIn(
+                f"href='/admin/system/tools/logfile.cgi?logfile=plugins%2Ftest%2F{filename}"
+                "&amp;format=template' target='_blank'", logpage)
+            self.assertNotIn("index.cgi?tab=logs&amp;logfile=", logpage)
+            self.assertNotIn('id="sessionLog"', logpage)
             status = endpoint("action=status")
             self.assertIn('"running":false', status)
             self.assertIn("400 Bad Request", endpoint("action=log&session=../../miflora.cfg"))
@@ -923,6 +1057,33 @@ sub get_miniservers { return (); }
             (root / "lastdata.dat").write_text("Temperature=21.8\n")
             status = endpoint("action=status")
             self.assertEqual(status.count("Temperature=21.8"), 1)
+            progress = (
+                "12:00:00 Adapter address 11:22:33:44:55:66\n"
+                "12:00:01 Discovered aa:bb:cc:dd:ee:ff (Flower care), RSSI -60 dBm\n"
+                "12:00:02 Discovered 5C:85:7E:B0:F3:AD (Flower care), RSSI -70 dBm\n"
+                "12:00:03 Discovered AA:BB:CC:DD:EE:FF (Flower care), RSSI -60 dBm\n"
+                "12:00:04 Cannot poll AA:BB:CC:DD:EE:FF: timeout\n"
+            )
+            (root / "poll-progress.log").write_text(progress)
+            response = json.loads(endpoint("action=status").split("\r\n\r\n", 1)[-1])
+            self.assertEqual(response["sensors"], ["AA:BB:CC:DD:EE:FF", "5C:85:7E:B0:F3:AD"])
+            page = endpoint("tab=status")
+            self.assertIn('value="AA:BB:CC:DD:EE:FF"', page)
+            self.assertIn('<option value="5C:85:7E:B0:F3:AD">5C:85:7E:B0:F3:AD</option>', page)
+            self.assertNotIn("(Example)", page)
+            self.assertIn("400 Bad Request", endpoint("action=clear-output"))
+            self.assertEqual((root / "poll-progress.log").read_text(), progress)
+            import fcntl
+            with (root / ".poll.lock").open("a") as lock:
+                fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                self.assertIn("cannot be cleared", endpoint("action=clear-output", "clear=1"))
+                self.assertEqual((root / "poll-progress.log").read_text(), progress)
+            (root / "retained_xiaomi-miflora.log").write_text("query log")
+            endpoint("action=clear-output", "clear=1")
+            self.assertEqual((root / "poll-progress.log").read_text(), "")
+            self.assertEqual((root / "lastdata.dat").read_text(), "")
+            self.assertEqual((root / "retained_xiaomi-miflora.log").read_text(), "query log")
+            self.assertIn('5C:85:7E:B0:F3:AD (Example)', endpoint("tab=status"))
 
     def test_js_examples_match_actual_transports(self):
         import shutil

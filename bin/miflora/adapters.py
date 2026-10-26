@@ -44,7 +44,7 @@ def hci_details():
     """Read version and revision as in TeslaCmd; never change controller state."""
     command = shutil.which("hciconfig")
     if not command:
-        logging.warning("hciconfig unavailable; HCI version/revision cannot be displayed")
+        logging.debug("hciconfig unavailable; HCI version/revision cannot be displayed")
         return {}
     try:
         result = subprocess.run(
@@ -52,7 +52,7 @@ def hci_details():
             env={**os.environ, "LC_ALL": "C"}, check=True,
         )
     except (OSError, subprocess.SubprocessError) as error:
-        logging.warning("Cannot read HCI version/revision: %s", error)
+        logging.debug("Cannot read HCI version/revision: %s", error)
         return {}
     return parse_hci_details(result.stdout)
 

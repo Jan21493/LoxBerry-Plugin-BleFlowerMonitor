@@ -8,6 +8,14 @@ from bleak.backends.bluezdbus.scanner import BleakScannerBlueZDBus
 
 VALID_DEVICE_NAMES = {"flower mate", "flower care"}
 DEVICE_PREFIX = "C4:7C:8D:"
+RSSI_AT_ONE_METER = -59
+
+
+def estimate_distance_m(rssi):
+    """Estimate free-space distance with an uncalibrated -59 dBm 1 m reference."""
+    if rssi is None:
+        return None
+    return max(1, round(10 ** ((RSSI_AT_ONE_METER - rssi) / 20)))
 
 
 async def scan(adapter, timeout=10):
@@ -18,8 +26,11 @@ async def scan(adapter, timeout=10):
         if (name.lower() in VALID_DEVICE_NAMES
                 or device.address.upper().startswith(DEVICE_PREFIX)):
             if device.address.upper() not in devices:
-                logging.info("Discovered %s (%s), RSSI %s dBm",
-                             device.address, name, advertisement.rssi)
+                distance = estimate_distance_m(advertisement.rssi)
+                distance_text = (f", approx. {distance} m line of sight without walls"
+                                 if distance is not None else "")
+                logging.info("Discovered %s (%s), RSSI %s dBm%s",
+                             device.address, name, advertisement.rssi, distance_text)
             devices[device.address.upper()] = device
 
     # adapter is needed by Bleak <= 2.0; newer releases use bluez["adapter"].

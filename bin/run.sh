@@ -1,5 +1,6 @@
 #!/bin/sh
 set -eu
+export PYTHONIOENCODING=utf-8
 
 PLUGINBIN=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 if [ ! -x "$PLUGINBIN/venv/bin/python3" ]; then

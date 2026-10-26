@@ -57,9 +57,9 @@ async def read_sample(device, retries=3):
 
 
 async def _read_sample(device):
-    logging.info("Connecting to %s via BlueZ GATT", device.address)
+    logging.debug("Connecting to %s via BlueZ GATT", device.address)
     async with BleakClient(device, backend=BleakClientBlueZDBus, timeout=15) as client:
-        logging.info("Connected to %s; reading firmware and battery", device.address)
+        logging.debug("Connected to %s; reading firmware and battery", device.address)
         name = bytes(await client.read_gatt_char(NAME_UUID)).decode("utf-8").rstrip("\0")
         firmware_data = await client.read_gatt_char(FIRMWARE_UUID)
         if len(firmware_data) < 3:
@@ -68,9 +68,9 @@ async def _read_sample(device):
         if not re.fullmatch(r"\d+\.\d+\.\d+", firmware):
             raise ValueError("Invalid MiFlora firmware version")
         if tuple(map(int, firmware.split("."))) >= (2, 6, 6):
-            logging.info("Enabling live measurements for %s (firmware %s)", device.address, firmware)
+            logging.debug("Enabling live measurements for %s (firmware %s)", device.address, firmware)
             await client.write_gatt_char(MODE_UUID, b"\xa0\x1f", response=True)
             await asyncio.sleep(0.2)
         data = await client.read_gatt_char(DATA_UUID)
-        logging.info("Measurements received from %s", device.address)
+        logging.debug("Measurements received from %s", device.address)
         return decode_sample(name, firmware_data, data)
