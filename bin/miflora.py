@@ -18,6 +18,7 @@ import threading
 import time
 
 from miflora.adapters import adapter_kind, detect_adapters, inventory, select_adapter
+from miflora.session import poll_session
 
 SCAN_RETRY_DELAY = 10
 LEGACY_MQTT_KEYS = ("MQTTBROKER", "MQTTPORT", "MQTTUSERNAME", "MQTTPASSWORD")
@@ -189,7 +190,7 @@ def mqtt_publish(settings, samples):
                 message.wait_for_publish(timeout=10)
                 if not message.is_published():
                     raise TimeoutError(f"MQTT publish acknowledgement missing for {topic}")
-        logging.info("MQTT delivery acknowledged for %s sensor(s)", len(samples))
+        logging.info("MQTT delivery acknowledged for %s sensor(s)", len(samples), extra={"success": True})
     finally:
         client.disconnect()
         client.loop_stop()
@@ -203,6 +204,8 @@ def udp_publish(settings, samples, host):
                 payload = f"{address}.{key}={value}".encode()
                 if connection.sendto(payload, (host, settings.getint("UDPPORT", 5006))) != len(payload):
                     raise OSError("Incomplete UDP datagram")
+    logging.info("UDP sent for %s sensor(s) to %s:%s (no acknowledgement)",
+                 len(samples), host, settings.getint("UDPPORT", 5006))
 
 
 async def poll(settings, datafile):
@@ -211,7 +214,12 @@ async def poll(settings, datafile):
     from miflora.miflora_scanner import scan
 
     selection = settings.get("BTADAPTER", "serial")
-    adapter = select_adapter(selection, detect_adapters())
+    adapters = detect_adapters()
+    adapter = select_adapter(selection, adapters)
+    selected = next(item for item in adapters if item.id == adapter)
+    logging.info("Adapter selection: %s - %s",
+                 {"serial": "Onboard", "usb": "USB", "default": "Default - hci0"}.get(selection, selection),
+                 selected.label)
     logging.info("Scanning with %s using Bleak / BlueZ D-Bus", adapter)
     datafile.write_text(f"Polling via {adapter} (Bleak / BlueZ D-Bus)...\n")
     try:
@@ -220,16 +228,28 @@ async def poll(settings, datafile):
         # Some USB adapters are reset by the kernel after a scan timeout and get a new hci number.
         logging.warning("Scan with %s failed (%s); retrying once", adapter, error)
         await asyncio.sleep(SCAN_RETRY_DELAY)
-        adapter = select_adapter(selection, detect_adapters())
+        adapters = detect_adapters()
+        adapter = select_adapter(selection, adapters)
+        selected = next(item for item in adapters if item.id == adapter)
+        logging.info("Adapter after retry (%s): %s",
+                     {"serial": "Onboard", "usb": "USB", "default": "Default - hci0"}.get(selection, selection),
+                     selected.label)
         logging.info("Retrying scan with %s", adapter)
+        datafile.write_text(f"Polling via {adapter} (Bleak / BlueZ D-Bus)...\n")
         devices = await scan(adapter)
+    logging.info("Scan finished: %s MiFlora sensor(s) found", len(devices))
     samples = []
     errors = []
     for device in devices:
         try:
+            logging.info("Reading sensor %s", device.address)
             values = await read_sample(device)
             values.update(timestamp_values(settings.get("LOCALTIME", "1") == "1"))
             samples.append((device.address.replace(":", "").upper(), values))
+            with datafile.open("a") as handle:
+                for key, value in values.items():
+                    handle.write(f"{device.address.replace(':', '').upper()}.{key}={value}\n")
+            logging.info("Sensor %s read successfully", device.address, extra={"success": True})
         except (BleakError, OSError, asyncio.TimeoutError, ValueError) as error:
             logging.error("Cannot poll %s: %s", device.address, error)
             errors.append(f"ERROR {device.address}: {error}")
@@ -247,6 +267,7 @@ async def poll(settings, datafile):
 
     if samples and settings.get("MQTTENABLED", "1") == "1":
         try:
+            logging.info("Sending values via MQTT")
             await asyncio.to_thread(mqtt_publish, settings, samples)
         except (OSError, ValueError, RuntimeError) as error:
             logging.error("MQTT delivery failed: %s", error)
@@ -255,6 +276,7 @@ async def poll(settings, datafile):
                 handle.write(errors[-1] + "\n")
     if samples and settings.get("UDPENABLED", "0") == "1":
         try:
+            logging.info("Sending values via UDP")
             host = miniserver_address(settings, os.environ.get("LBSCONFIG", "."))
             await asyncio.to_thread(udp_publish, settings, samples, host)
         except (OSError, ValueError, KeyError, configparser.Error) as error:
@@ -266,33 +288,54 @@ async def poll(settings, datafile):
 
 
 def run(args):
-    settings = read_config(args.configfile)
-    if settings.get("ENABLED", "1") != "1":
-        logging.info("Plugin disabled")
-        return 0
-    if args.daemon and int(time.strftime("%H")) % settings.getint("POLLFREQUENCY", 12):
-        return 0
-    if settings.get("MQTTENABLED", "1") != "1" and settings.get("UDPENABLED", "0") != "1":
-        raise ValueError("Enable at least one output: MQTT or UDP")
+    startup_error = None
+    try:
+        settings = read_config(args.configfile)
+    except (OSError, ValueError, KeyError, configparser.Error) as error:
+        startup_error = error
+        settings = None
+    if args.daemon and settings is not None:
+        if settings.get("ENABLED", "1") != "1":
+            return 0
+        if int(time.strftime("%H")) % settings.getint("POLLFREQUENCY", 12):
+            return 0
     configfile = Path(args.configfile).resolve()
     datafile = Path(args.datafile) if args.datafile else (
         Path(os.environ["LBPDATA"]) / configfile.parent.name / "lastdata.dat"
         if "LBPDATA" in os.environ else configfile.parent / "lastdata.dat"
     )
     datafile.parent.mkdir(parents=True, exist_ok=True)
-    with (datafile.parent / ".poll.lock").open("a") as lock:
+    inherited_fd = getattr(args, "lock_fd", None)
+    lockfile = (os.fdopen(inherited_fd, "a") if inherited_fd is not None
+                else (datafile.parent / ".poll.lock").open("a"))
+    with lockfile as lock:
         try:
             fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
         except BlockingIOError:
             logging.warning("A MiFlora poll is already running")
             return 0
-        from bleak.exc import BleakError
-        try:
-            return asyncio.run(poll(settings, datafile))
-        except (BleakError, OSError, ValueError, RuntimeError) as error:
-            datafile.write_text(f"ERROR: {error}\n")
-            logging.exception("Bluetooth polling failed: %s", error)
-            return 1
+        logfile = getattr(args, "logfile", str(datafile.parent / "xiaomi-miflora.log"))
+        level = logging.DEBUG if getattr(args, "debug", False) else None
+        with poll_session(datafile, logfile, level) as outcome:
+            from bleak.exc import BleakError
+            try:
+                if startup_error is not None:
+                    raise startup_error
+                if settings.get("ENABLED", "1") != "1":
+                    logging.warning("Plugin disabled; enable it in Settings before polling")
+                    datafile.write_text("Plugin disabled; no scan performed.\n")
+                    outcome["status"] = "DISABLED"
+                    return 0
+                if settings.get("MQTTENABLED", "1") != "1" and settings.get("UDPENABLED", "0") != "1":
+                    raise ValueError("Enable at least one output: MQTT or UDP")
+                result = asyncio.run(poll(settings, datafile))
+                outcome["status"] = "ERROR" if result else "OK"
+                return result
+            except (BleakError, OSError, ValueError, RuntimeError, KeyError, configparser.Error) as error:
+                with datafile.open("a") as handle:
+                    handle.write(f"ERROR: {error}\n")
+                logging.exception("Bluetooth polling failed: %s", error)
+                return 1
 
 
 def main():
@@ -304,6 +347,7 @@ def main():
     parser.add_argument("--list-adapters", action="store_true", help="Print sysfs adapter inventory as JSON")
     parser.add_argument("--migrate-config", action="store_true", help="Migrate legacy adapter selection to USB/Onboard")
     parser.add_argument("--debug", action="store_true", help="Enable detailed logging")
+    parser.add_argument("--lock-fd", type=int, help=argparse.SUPPRESS)
     args = parser.parse_args()
     if args.migrate_config:
         try:
@@ -327,6 +371,8 @@ def main():
             logging.StreamHandler(),
         ],
     )
+    for handler in logging.getLogger().handlers:
+        handler.setLevel(logging.DEBUG if args.debug else logging.INFO)
     try:
         return run(args)
     except (OSError, ValueError, KeyError, RuntimeError, configparser.Error, ImportError) as error:

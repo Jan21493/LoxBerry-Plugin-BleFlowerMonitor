@@ -27,9 +27,49 @@ with `org.bluez`.
 
 ## Settings
 
-The settings page follows the TeslaCmd layout, with separate sections and
-inline help for general scheduling, Bluetooth, MQTT, optional UDP and diagnostics.
-Save settings before using **Poll now**.
+The navigation follows EaseeHome, with **Settings**, **Status and queries** and
+**Logs** tabs. Settings contains scheduling, adapter selection, the installed
+adapter inventory and transports. Save buttons are centered.
+Status and queries contains a live query viewer and the Loxone virtual-input
+setup guide. Each query reports the configured adapter type (USB/Onboard/Default)
+and the resolved controller, including its detailed adapter description, in the
+live progress display. Save settings before using **Poll now**.
+
+One click immediately shows that a scan is starting, then refreshes progress
+and measurements every second without reloading the page. Concurrent manual
+and scheduled queries are prevented by the same lock, including the web-to-poller
+handoff. **Auto-scroll** can be switched off to inspect earlier lines;
+**Download** exports the displayed progress as text. Measurements appear only
+once in the viewer; the raw last-data file is not appended again at the end.
+
+### Query logs
+
+Each actual manual or scheduled query has a separate file in the plugin log
+directory as `YYYYMMDD_HHMMSS_microseconds_xiaomi-miflora.log`, without a
+`sessions` subdirectory. Native LOGSTART
+and LOGEND markers include the result and duration, including failed queries. Skipped hourly
+schedule checks and duplicate requests do not create empty sessions.
+The Logs tab uses LoxBerry's standard `loglist_html(NAME => 'FlowerCare')`,
+as in TeslaCmd's `logfiles.php`. There is exactly one group, **FlowerCare**;
+opening, live viewing and downloading use LoxBerry's native Log Manager.
+Python logging is forwarded to `LoxBerry::Log` through the plugin's
+`miflora-log.pl` helper (INFO/OK/DEBUG/WARNING/ERROR and LOGSTART/LOGEND), which
+registers each session in LoxBerry's log database, including its result status.
+This uses the established Perl API and does not require the optional Python
+LoxBerry library on older installations.
+LoxBerry manages retention and deletes old logs; the plugin does not delete log
+files. Details are limited to 2 MiB per file; LOGEND is preserved after reaching
+that limit. LoxBerry stores
+logs on a RAM disk, so logs may disappear after reboot.
+
+Use the standard log-level selector included in LoxBerry's log list. There is no
+plugin-specific level setting or separate save button. `LoxBerry::Log` reads the
+native level and tracks changes while a query is running; Python forwards
+messages without overriding that selection. DEBUG also includes Bleak/BlueZ
+diagnostics. Live progress
+and start/end markers remain available even with an ERROR-only log. `--debug`
+overrides the configured level for command-line troubleshooting. The existing
+rotating `xiaomi-miflora.log` remains available for startup/launcher diagnostics.
 
 ### Bluetooth adapter
 
@@ -152,11 +192,70 @@ Firmware 2.6.6 and newer is switched to live-data mode before reading. GATT
 characteristic UUIDs replace the old fixed ATT handles. Invalid or incomplete
 sensor responses are reported instead of being published as zero values.
 
+The standard live-data query already exposes all the measurements listed by
+the [FHEM Xiaomi Flower Sensor wiki](https://wiki.fhem.de/wiki/Xiaomi_Flower_Sensor).
+Conductivity is electrical conductivity, not a direct fertilizer concentration.
+Light is illuminance in lux (lx), not luminous flux in lumens; the linked wiki
+uses these terms inconsistently. The BLE device name is not the plant name
+configured in Flower Care. MAC address and discovery RSSI (dBm) are available in
+live diagnostics, not additional published measurements. History and other
+vendor-specific services are not part of this live-data query.
+
+### Virtual inputs in Loxone Config
+
+The Status and queries tab generates examples for all nine parameters using
+the saved topic prefix and an editable sensor MAC. Its MQTT/UDP selector only
+changes the help, not the active outputs.
+
+For direct UDP, add a virtual UDP input on the configured plugin UDP port and
+an input command for each numeric value, for example:
+
+```text
+5C857EB0F3AD.Temperature=\v
+```
+
+The help reads `Mqtt.Gatewayversion` and `Base.Version` from LoxBerry's
+`general.json`. Only `Gatewayversion=2` activates the v2 instructions; older
+installations without that field get the v1 guide. On LoxBerry 4 with v1 selected,
+the guide recommends switching to v2.
+
+For **MQTT Gateway v1**, subscribe to `miflora/#`, assign the desired topics to
+the Miniserver and enable HTTP forwarding. The plugin does not automatically
+register this subscription.
+
+For **MQTT Gateway v2**, select individual topics in **Subscriptions** and
+assign them to the Miniserver, rather than subscribing to a whole folder.
+Copy the input names from **Traffic**. In Loxone Config, create a virtual HTTP
+input as a folder, with `.` as its URL, and a virtual HTTP input command per
+numeric value. Set its exact name and use `\.` as command recognition to satisfy
+the configuration editor's required-field check. No HTTP polling is performed:
+the gateway pushes values via Miniserver API calls. Deploy the configuration.
+Only changed values are forwarded; wait for changes or use **Resend all** in
+Traffic to initialize newly created inputs.
+
+For the actual published topic
+`miflora/5c857eb0f3ad/temperature`, create the virtual input:
+
+```text
+miflora_5c857eb0f3ad_temperature
+```
+
+Case matters: `miflora_5C857EB0F3AD_Temperature` does not match the plugin's
+lowercase topics. The gateway replaces `/`, spaces and `%` with `_` for HTTP
+input names. If the gateway forwards via UDP, its own port and command format
+apply instead; do not confuse that with the plugin's direct UDP output.
+`Name`, `Firmware` and `PollTimeString` are text values: use a **virtual text
+input** instead of a virtual HTTP input command with the corresponding name.
+The MQTT Gateway can send these strings through the Miniserver API too.
+Numeric UDP recognition `\v` does not decode those strings. UDP-specific
+instructions and text-value limitations are shown only when UDP is selected.
+
 ## Troubleshooting
 
-Check **Polling and diagnostics** in the settings page and the plugin log
-`xiaomi-miflora.log`. A scan takes ten seconds; retries and multiple sensors can
-make the full poll take several minutes. Refresh the page to see the results.
+Check **Status and queries** and the per-query **Logs** tab. A scan takes ten
+seconds; retries and multiple sensors can make a full query take several
+minutes. Progress updates automatically. Startup failures are also recorded
+in `xiaomi-miflora.log`.
 
 On the LoxBerry host (adjust paths if the plugin has a different folder):
 

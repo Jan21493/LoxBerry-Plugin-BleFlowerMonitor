@@ -4,6 +4,7 @@ import configparser
 import importlib.util
 from html.parser import HTMLParser
 import json
+import logging
 import os
 from pathlib import Path
 import socket
@@ -20,6 +21,7 @@ from urllib.parse import urlencode
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "bin"))
 from miflora import adapters, miflora_poller as poller, miflora_scanner as scanner
+from miflora import session
 from bleak.exc import BleakError
 
 spec = importlib.util.spec_from_file_location("plugin", ROOT / "bin/miflora.py")
@@ -150,7 +152,7 @@ class BLETests(unittest.IsolatedAsyncioTestCase):
         async def start():
             callback = factory.call_args.kwargs["detection_callback"]
             for entry in (device, device, named, other):
-                callback(entry, SimpleNamespace(local_name=None))
+                callback(entry, SimpleNamespace(local_name=None, rssi=-61))
 
         factory.return_value.__aenter__ = AsyncMock(side_effect=start)
         factory.return_value.__aexit__ = AsyncMock(return_value=False)
@@ -273,6 +275,10 @@ class ConfigTests(unittest.TestCase):
 
 
 class RunTests(unittest.TestCase):
+    def setUp(self):
+        native = patch.object(session, "NativeLog", FakeNativeLog)
+        native.start()
+        self.addCleanup(native.stop)
     def test_lock_prevents_overlapping_poll(self):
         with tempfile.TemporaryDirectory() as directory:
             datafile = Path(directory) / "lastdata.dat"
@@ -304,6 +310,158 @@ class RunTests(unittest.TestCase):
                 with patch.object(plugin, "poll", AsyncMock(return_value=0)) as poll:
                     self.assertEqual(plugin.run(args), 0)
                     self.assertEqual(poll.call_args.args[1], root / "data/custom-plugin/lastdata.dat")
+
+    def test_manual_disabled_plugin_gets_its_own_session(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            cfg = root / "miflora.cfg"
+            cfg.write_text("[MIFLORA]\nENABLED=0\n")
+            args = argparse.Namespace(configfile=cfg, datafile=str(root / "lastdata.dat"), daemon=False)
+            with patch.object(plugin, "poll") as poll:
+                self.assertEqual(plugin.run(args), 0)
+                poll.assert_not_called()
+            text = next(root.glob("*_xiaomi-miflora.log")).read_text()
+            self.assertIn("START", text)
+            self.assertIn("LOGEND", text)
+            self.assertIn("DISABLED", text)
+
+    def test_invalid_config_has_session_start_stop_and_error(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            cfg = root / "miflora.cfg"
+            cfg.write_text("[MIFLORA]\nPOLLFREQUENCY=3\n")
+            args = argparse.Namespace(configfile=cfg, datafile=str(root / "lastdata.dat"), daemon=False)
+            self.assertEqual(plugin.run(args), 1)
+            text = next(root.glob("*_xiaomi-miflora.log")).read_text()
+            self.assertIn("START", text)
+            self.assertIn("LOGEND", text)
+            self.assertIn("Invalid polling frequency", text)
+
+    def test_inherited_web_lock_is_reused(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            with (root / ".poll.lock").open("a") as lock:
+                plugin.fcntl.flock(lock, plugin.fcntl.LOCK_EX | plugin.fcntl.LOCK_NB)
+                args = argparse.Namespace(configfile=ROOT / "config/miflora.cfg",
+                                          datafile=str(root / "lastdata.dat"), daemon=False,
+                                          lock_fd=os.dup(lock.fileno()))
+                with patch.object(plugin, "poll", AsyncMock(return_value=0)) as poll:
+                    self.assertEqual(plugin.run(args), 0)
+                    poll.assert_awaited_once()
+
+
+class FakeNativeLog(session.NativeLog):
+    def __init__(self, filename, level):
+        logging.Handler.__init__(self)
+        self.threshold = logging.DEBUG
+        self.truncated = False
+        self.size = 0
+        self.filename = filename
+        self.setFormatter(logging.Formatter("%(message)s"))
+
+    def send(self, method, message):
+        with self.filename.open("a") as handle:
+            handle.write(f"<{method}> {message}\n")
+
+    def start(self, message):
+        self.send("LOGSTART", message)
+
+    def end(self, message):
+        self.send("LOGEND", message)
+
+    def close(self):
+        logging.Handler.close(self)
+
+
+class SessionTests(unittest.TestCase):
+    def setUp(self):
+        native = patch.object(session, "NativeLog", FakeNativeLog)
+        native.start()
+        self.addCleanup(native.stop)
+
+    def test_native_log_receives_messages_and_progress_independently(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            with session.poll_session(root / "data.dat", root / "plugin.log") as outcome:
+                logging.info("Sensor found")
+                logging.error("Test failure")
+                outcome["status"] = "ERROR"
+            text = next(root.glob("*_xiaomi-miflora.log")).read_text()
+            self.assertIn("START", text)
+            self.assertIn("LOGEND", text)
+            self.assertIn("Test failure", text)
+            self.assertIn("Sensor found", text)
+            self.assertIn("Sensor found", (root / "poll-progress.log").read_text())
+
+    def test_exception_keeps_end_marker_and_leaves_retention_to_loxberry(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            logs = root
+            for i in range(35):
+                (logs / f"20200101_000000_{i:06}_xiaomi-miflora.log").write_text("old")
+            with self.assertRaisesRegex(RuntimeError, "offline"):
+                with session.poll_session(root / "data.dat", root / "plugin.log", logging.DEBUG):
+                    raise RuntimeError("offline")
+            self.assertEqual(len(list(logs.glob("*_xiaomi-miflora.log"))), 36)
+            text = sorted(logs.glob("*_xiaomi-miflora.log"))[-1].read_text()
+            self.assertFalse((root / "sessions").exists())
+            self.assertIn("LOGEND", text)
+            self.assertIn("ERROR", text)
+
+    def test_size_limit_preserves_stop(self):
+        with tempfile.TemporaryDirectory() as directory, patch.object(session, "MAX_LOG_BYTES", 200):
+            root = Path(directory)
+            with session.poll_session(root / "data.dat", root / "plugin.log", logging.DEBUG):
+                for _ in range(10):
+                    logging.debug("details " * 20)
+            text = next(root.glob("*_xiaomi-miflora.log")).read_text()
+            self.assertIn("size limit", text)
+            self.assertIn("LOGEND", text)
+            self.assertLess(len(text), 700)
+
+    def test_messages_use_native_severity_methods(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            with session.poll_session(root / "data.dat", root / "plugin.log", logging.DEBUG) as outcome:
+                logging.debug("details")
+                logging.info("progress")
+                logging.info("delivered", extra={"success": True})
+                logging.warning("retry")
+                logging.error("failed")
+                outcome["status"] = "ERROR"
+            text = next(root.glob("*_xiaomi-miflora.log")).read_text()
+            for expected in ("<LOGSTART>", "<DEB> details", "<INF> progress",
+                             "<OK> delivered", "<WARN> retry", "<ERR> failed", "<LOGEND>"):
+                self.assertIn(expected, text)
+
+
+class NativeBridgeTests(unittest.TestCase):
+    def test_bridge_uses_loxberry_helper_and_finishes_session(self):
+        process = MagicMock()
+        process.stdout.readline.return_value = "READY\n"
+        process.wait.return_value = 0
+        process.poll.return_value = 0
+        with patch.object(session.subprocess, "Popen", return_value=process) as start:
+            log = session.NativeLog(Path("/logs/xiaomi-miflora/20261026_002247_xiaomi-miflora.log"), logging.DEBUG)
+            try:
+                log.start("query")
+                log.emit(logging.makeLogRecord({"msg": "done", "levelno": logging.INFO, "success": True}))
+                log.end("OK")
+            finally:
+                log.close()
+        self.assertEqual(start.call_args.args[0][-2:], ["xiaomi-miflora", "7"])
+        records = [json.loads(call.args[0]) for call in process.stdin.write.call_args_list]
+        self.assertEqual([record["method"] for record in records], ["LOGSTART", "OK", "LOGEND"])
+        process.wait.assert_called_once_with(timeout=10)
+
+    def test_native_default_level_is_not_overridden(self):
+        process = MagicMock()
+        process.poll.return_value = 0
+        with patch.object(session.subprocess, "Popen", return_value=process) as start:
+            log = session.NativeLog(Path("/logs/custom-folder/20261026_002247_xiaomi-miflora.log"))
+            log.close()
+        self.assertEqual(start.call_args.args[0][-1], "custom-folder")
+        self.assertEqual(len(start.call_args.args[0]), 4)
 
 
 class TransportTests(unittest.TestCase):
@@ -476,6 +634,18 @@ class TransportTests(unittest.TestCase):
 
 
 class PollTests(unittest.IsolatedAsyncioTestCase):
+    async def test_selected_adapter_type_and_description_are_logged(self):
+        for selection, kind, label in (("usb", "usb", "USB"), ("serial", "serial", "Onboard"),
+                                       ("default", "serial", "Default - hci0")):
+            with self.subTest(selection=selection), tempfile.TemporaryDirectory() as directory:
+                adapter = adapters.Adapter("hci0", kind, "hci0 - test Bluetooth chipset", "")
+                with patch.object(plugin, "detect_adapters", return_value=[adapter]):
+                    with patch.object(scanner, "scan", AsyncMock(return_value=[])):
+                        with self.assertLogs(level="INFO") as logs:
+                            await plugin.poll(settings(BTADAPTER=selection), Path(directory) / "lastdata.dat")
+                self.assertTrue(any(f"Adapter selection: {label} - hci0 - test Bluetooth chipset" in line
+                                    for line in logs.output))
+
     async def execute_poll(self, directory, devices, read, config=None):
         with patch.object(plugin, "detect_adapters", return_value=[adapters.Adapter("hci0", "serial", "", "")]):
             with patch.object(scanner, "scan", AsyncMock(return_value=devices)):
@@ -551,6 +721,7 @@ our @EXPORT = qw($lbpconfigdir $lbptemplatedir $lbpbindir $lbplogdir $lbpdatadir
 our ($lbpconfigdir, $lbplogdir, $lbpdatadir) = ($ENV{TEST_DATA}) x 3;
 our $lbptemplatedir = "$ENV{TEST_ROOT}/templates";
 our $lbpbindir = "$ENV{TEST_DATA}/bin";
+our $lbsconfigdir = "$ENV{TEST_DATA}";
 sub readlanguage {
     my ($template) = @_;
     open(my $handle, '<', "$lbptemplatedir/lang/language_en.ini") or die $!;
@@ -563,7 +734,9 @@ sub readlanguage {
 sub get_miniservers { return (); }
 1;
 ''')
-            (root / "LoxBerry/Web.pm").write_text("package LoxBerry::Web; sub lbheader {} sub lbfooter {} 1;")
+            (root / "LoxBerry/Web.pm").write_text(
+                "package LoxBerry::Web; sub lbheader {} sub lbfooter {} "
+                "sub loglist_html { my %p = @_; return '<div>Native log list: '.$p{NAME}.'</div>'; } 1;")
             (root / "bin").mkdir()
             (root / "bin/miflora.py").write_text(
                 "print(" + repr(json.dumps([
@@ -577,6 +750,9 @@ sub get_miniservers { return (); }
             (root / "bin/run.sh").write_text('#!/bin/sh\nprintf "poll executed" > "' + str(root / "poll-executed") + '"\n')
             configfile = root / "miflora.cfg"
             configfile.write_text((ROOT / "config/miflora.cfg").read_text())
+            generalfile = root / "general.json"
+            generalfile.write_text(json.dumps({"Base": {"Version": "4.0.1.1"},
+                                              "Mqtt": {"Gatewayversion": 2, "Brokerhost": "localhost"}}))
             env = dict(os.environ, PERL5LIB=str(root) + os.pathsep + os.environ.get("PERL5LIB", ""),
                        TEST_DATA=str(root), TEST_ROOT=str(ROOT), REQUEST_METHOD="GET")
             result = subprocess.run(["perl", str(ROOT / "webfrontend/htmlauth/index.cgi")],
@@ -587,6 +763,7 @@ sub get_miniservers { return (); }
             self.assertIn("BlueZ D-Bus", html)
             self.assertIn("selBTAdapter", html)
             self.assertIn("Installed Bluetooth adapters", html)
+            self.assertIn('<div class="miflora-save"><input', html)
             self.assertNotIn("ARRAY(", html)
             self.assertNotIn("<TMPL_", html)
             class Controls(HTMLParser):
@@ -611,7 +788,7 @@ sub get_miniservers { return (); }
 
             controls = Controls()
             controls.feed(html)
-            for button in ("btnSave", "btnPoll", "btnRefresh"):
+            for button in ("btnSave",):
                 self.assertEqual(controls.inputs[button]["type"], "submit")
                 self.assertNotIn("disabled", controls.inputs[button])
                 self.assertEqual(controls.inputs[button].get("data-inline"), "true")
@@ -621,6 +798,28 @@ sub get_miniservers { return (); }
             self.assertIn("Onboard - Raspberry Pi 5 Model B Rev 1.1 Bluetooth", html)
             for removed in ("txtMQTTBroker", "txtMQTTPort", "txtMQTTUsername", "txtMQTTPassword"):
                 self.assertNotIn(removed, html)
+            status_page = subprocess.run(["perl", str(ROOT / "webfrontend/htmlauth/index.cgi")],
+                                        env=dict(env, QUERY_STRING="tab=status"), capture_output=True)
+            self.assertEqual(status_page.returncode, 0, status_page.stderr.decode())
+            status_html = status_page.stdout.decode()
+            self.assertNotIn("Installed Bluetooth adapters", status_html)
+            self.assertIn("Virtual inputs in Loxone Config", status_html)
+            self.assertIn("MQTT Gateway version 2 is selected.", status_html)
+            self.assertIn("Resend all", status_html)
+            self.assertIn("single dot (<code>.</code>)", status_html)
+            self.assertIn("<code>\\.</code>", status_html)
+            self.assertIn("<b><i>'Subscriptions'</i></b>", status_html)
+            self.assertNotIn("&lt;b&gt;", status_html)
+            self.assertIn("virtual text input", status_html)
+            self.assertNotIn('id="mqttSubscription"', status_html)
+            self.assertNotIn('name="btnSave"', status_html)
+            self.assertIn('id="dataAutoScroll"', status_html)
+            status_controls = Controls()
+            status_controls.feed(status_html)
+            controls.inputs.update(status_controls.inputs)
+            for button in ("btnPoll", "btnRefresh"):
+                self.assertEqual(controls.inputs[button]["type"], "submit")
+                self.assertEqual(controls.inputs[button]["data-inline"], "true")
             form = dict(btnSave="Save", chkPluginEnabled="1", selPollFrequency="4", chkLocaltime="1",
                         selBTAdapter="usb", chkMQTTEnabled="1", txtMQTTTopic="miflora",
                         chkUDPEnabled="0", selMiniServer="", txtMsUDPPort="5006")
@@ -653,7 +852,7 @@ sub get_miniservers { return (); }
                 payload = urlencode(bad_form)
                 before = configfile.read_text()
                 result = subprocess.run(["perl", str(ROOT / "webfrontend/htmlauth/index.cgi")],
-                                        input=payload.encode(), env=dict(env, CONTENT_LENGTH=str(len(payload))),
+                                        input=payload.encode(), env=dict(env, QUERY_STRING="tab=status", CONTENT_LENGTH=str(len(payload))),
                                         capture_output=True)
                 self.assertEqual(result.returncode, 0, result.stderr.decode())
                 self.assertIn('role="alert"', result.stdout.decode())
@@ -662,11 +861,14 @@ sub get_miniservers { return (); }
                 (root / "lastdata.dat").write_text("latest sensor values")
                 payload = urlencode({button: controls.inputs[button]["value"]})
                 result = subprocess.run(["perl", str(ROOT / "webfrontend/htmlauth/index.cgi")],
-                                        input=payload.encode(), env=dict(env, CONTENT_LENGTH=str(len(payload))),
+                                        input=payload.encode(), env=dict(env, QUERY_STRING="tab=status", CONTENT_LENGTH=str(len(payload))),
                                         capture_output=True)
                 self.assertEqual(result.returncode, 0, result.stderr.decode())
                 self.assertEqual(configfile.read_text(), before)
-                self.assertIn("latest sensor values", result.stdout.decode())
+                if button == "btnRefresh":
+                    self.assertIn("latest sensor values", result.stdout.decode())
+                else:
+                    self.assertIn("Starting scan", result.stdout.decode())
                 if button == "btnPoll":
                     import time
                     for _ in range(100):
@@ -674,6 +876,60 @@ sub get_miniservers { return (); }
                             break
                         time.sleep(0.01)
                     self.assertTrue((root / "poll-executed").exists())
+            get_env = dict(env, REQUEST_METHOD="GET", CONTENT_LENGTH="0")
+            def endpoint(query, payload=None):
+                call_env = dict(get_env, QUERY_STRING=query)
+                if payload is not None:
+                    call_env.update(REQUEST_METHOD="POST", CONTENT_LENGTH=str(len(payload)))
+                result = subprocess.run(["perl", str(ROOT / "webfrontend/htmlauth/index.cgi")],
+                                        input=payload.encode() if payload else None, env=call_env, capture_output=True)
+                self.assertEqual(result.returncode, 0, result.stderr.decode())
+                return result.stdout.decode()
+            for version, lbversion, v2, recommendation in (
+                (2, "4.0.1.1", True, False),
+                ("2", "4.0.1.1", True, False),
+                (1, "4.0.1.1", False, True),
+                (None, "3.0.0", False, False),
+                (1, "3.0.0", False, False),
+            ):
+                generalfile.write_text(json.dumps({"Base": {"Version": lbversion},
+                                                  "Mqtt": {"Gatewayversion": version, "Brokerhost": "localhost"}}))
+                page = endpoint("tab=status")
+                self.assertEqual('id="mqttSubscription"' in page, not v2)
+                self.assertEqual("Resend all" in page, v2)
+                self.assertEqual("recommended for efficiency" in page, recommendation)
+                self.assertIn('id="udpHelp" hidden', page)
+            generalfile.write_text("invalid")
+            self.assertIn("Could not read the MQTT Gateway version", endpoint("tab=status"))
+            generalfile.write_text(json.dumps({"Mqtt": {}}))
+            self.assertIn("No MQTT broker configuration found", endpoint("tab=status"))
+            logpage = endpoint("tab=logs")
+            self.assertIn("Native log list: FlowerCare", logpage)
+            self.assertNotIn('id="sessionSelect"', logpage)
+            self.assertNotIn('id="selLogLevel"', logpage)
+            self.assertNotIn('name="btnLogSave"', logpage)
+            status = endpoint("action=status")
+            self.assertIn('"running":false', status)
+            self.assertIn("400 Bad Request", endpoint("action=log&session=../../miflora.cfg"))
+            self.assertIn("400 Bad Request", endpoint("action=poll"))
+            old_settings = plugin.read_config(configfile)
+            endpoint("tab=logs", "btnLogSave=1&selLogLevel=DEBUG")
+            self.assertNotIn("LOGLEVEL", plugin.read_config(configfile))
+            self.assertEqual(plugin.read_config(configfile)["MQTTTOPIC"], old_settings["MQTTTOPIC"])
+            before = configfile.read_text()
+            endpoint("tab=logs", "btnLogSave=1&selLogLevel=INVALID")
+            self.assertEqual(configfile.read_text(), before)
+            (root / "poll-progress.log").write_text("Temperature=21.8\nMQTT delivery acknowledged\n")
+            (root / "lastdata.dat").write_text("Temperature=21.8\n")
+            status = endpoint("action=status")
+            self.assertEqual(status.count("Temperature=21.8"), 1)
+
+    def test_js_examples_match_actual_transports(self):
+        import shutil
+        if not shutil.which("node"):
+            self.skipTest("Node.js needed for JavaScript regression tests")
+        result = subprocess.run(["node", str(ROOT / "tests/test_frontend.js")], capture_output=True)
+        self.assertEqual(result.returncode, 0, result.stderr.decode())
 
 
 if __name__ == "__main__":
