@@ -1,6 +1,7 @@
 """Discover MiFlora devices on one BlueZ adapter."""
 
 import asyncio
+import logging
 
 from bleak import BleakScanner
 from bleak.backends.bluezdbus.scanner import BleakScannerBlueZDBus
@@ -16,6 +17,9 @@ async def scan(adapter, timeout=10):
         name = advertisement.local_name or device.name or ""
         if (name.lower() in VALID_DEVICE_NAMES
                 or device.address.upper().startswith(DEVICE_PREFIX)):
+            if device.address.upper() not in devices:
+                logging.info("Discovered %s (%s), RSSI %s dBm",
+                             device.address, name, advertisement.rssi)
             devices[device.address.upper()] = device
 
     # adapter is needed by Bleak <= 2.0; newer releases use bluez["adapter"].

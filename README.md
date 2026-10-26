@@ -15,6 +15,7 @@ preserved.
   current LoxBerry installation based on Debian 11 or newer. Older LoxBerry
   images must be upgraded first; the installer reports unsupported runtimes.
 - A powered, unblocked Bluetooth LE adapter, with the `bluetooth` service running.
+- MQTT Basics configured in LoxBerry when MQTT delivery is enabled.
 - Internet access during installation to install the Python dependencies.
 
 The installer installs BlueZ, D-Bus and Python venv support, starts BlueZ and
@@ -26,9 +27,49 @@ with `org.bluez`.
 
 ## Settings
 
-The settings page follows the TeslaCmd layout, with separate sections and
-inline help for general scheduling, Bluetooth, MQTT, optional UDP and diagnostics.
-Save settings before using **Poll now**.
+The navigation follows EaseeHome, with **Settings**, **Status and queries** and
+**Logs** tabs. Settings contains scheduling, adapter selection, the installed
+adapter inventory and transports. Save buttons are centered.
+Status and queries contains a live query viewer and the Loxone virtual-input
+setup guide. Each query reports the configured adapter type (USB/Onboard/Default)
+and the resolved controller, including its detailed adapter description, in the
+live progress display. Save settings before using **Poll now**.
+
+One click immediately shows that a scan is starting, then refreshes progress
+and measurements every second without reloading the page. Concurrent manual
+and scheduled queries are prevented by the same lock, including the web-to-poller
+handoff. **Auto-scroll** can be switched off to inspect earlier lines;
+**Download** exports the displayed progress as text. Measurements appear only
+once in the viewer; the raw last-data file is not appended again at the end.
+
+### Query logs
+
+Each actual manual or scheduled query has a separate file in the plugin log
+directory as `YYYYMMDD_HHMMSS_microseconds_xiaomi-miflora.log`, without a
+`sessions` subdirectory. Native LOGSTART
+and LOGEND markers include the result and duration, including failed queries. Skipped hourly
+schedule checks and duplicate requests do not create empty sessions.
+The Logs tab uses LoxBerry's standard `loglist_html(NAME => 'FlowerCare')`,
+as in TeslaCmd's `logfiles.php`. There is exactly one group, **FlowerCare**;
+opening, live viewing and downloading use LoxBerry's native Log Manager.
+Python logging is forwarded to `LoxBerry::Log` through the plugin's
+`miflora-log.pl` helper (INFO/OK/DEBUG/WARNING/ERROR and LOGSTART/LOGEND), which
+registers each session in LoxBerry's log database, including its result status.
+This uses the established Perl API and does not require the optional Python
+LoxBerry library on older installations.
+LoxBerry manages retention and deletes old logs; the plugin does not delete log
+files. Details are limited to 2 MiB per file; LOGEND is preserved after reaching
+that limit. LoxBerry stores
+logs on a RAM disk, so logs may disappear after reboot.
+
+Use the standard log-level selector included in LoxBerry's log list. There is no
+plugin-specific level setting or separate save button. `LoxBerry::Log` reads the
+native level and tracks changes while a query is running; Python forwards
+messages without overriding that selection. DEBUG also includes Bleak/BlueZ
+diagnostics. Live progress
+and start/end markers remain available even with an ERROR-only log. `--debug`
+overrides the configured level for command-line troubleshooting. The existing
+rotating `xiaomi-miflora.log` remains available for startup/launcher diagnostics.
 
 ### Bluetooth adapter
 
@@ -38,21 +79,35 @@ The selection and inventory are ported from the sysfs-based adapter logic in
 `49cc2c3598a3b3e5d7c6f7b8c24b214170671d51` (Apache-2.0, see
 [LICENSE.md](LICENSE.md)). The Python port shares one implementation between the
 web UI and poller, uses sysfs product/manufacturer and USB chip IDs for the
-inventory, and does not use TeslaCmd's legacy `hciconfig` diagnostics.
+inventory. As in TeslaCmd, read-only `hciconfig -a` diagnostics supply the HCI
+version and revision. This command is not used for selection, scanning or GATT
+communication; missing diagnostics are logged without blocking BLE operation.
 
 | Selection | Behaviour |
 | --- | --- |
-| Default | Use `hci0`, matching the previous plugin behaviour. |
-| Onboard / UART | First onboard/UART controller in natural hci-number order. |
+| Default - hci0 | Always use `hci0`; no fallback if it is missing. |
+| Onboard | First onboard/UART controller in natural hci-number order. |
 | USB | First USB controller in natural hci-number order. |
-| Specific `hciX` | Use exactly that controller, useful with multiple USB adapters. |
 
-Installed adapters are listed with their hci ID, bus type, available product,
-chip and address information. Unplugged selections remain visible. A missing
-selected adapter fails explicitly; there is **no fallback** to another controller.
-Type-based selection handles changes in hci numbering after reboots; explicit
-hci IDs follow the OS numbering, not a persistent physical-device identity.
-An internally mounted USB controller is classified as USB, not UART.
+The dropdown contains **Default - hci0, USB and Onboard**. Default explicitly
+uses `hci0`. USB and Onboard store the adapter type, not an hci number.
+Each poll resolves the first matching adapter of the selected type again, so the
+selection survives hci renumbering. A missing selected type fails explicitly;
+there is **no fallback** to another type. An internally mounted USB controller
+is classified as USB, not UART.
+
+Example dropdown labels (the actual USB chipset is determined from VID:PID,
+and the board model is read from the system, not hardcoded):
+
+```text
+USB - currently mapped to hci6 - Realtek Bluetooth 5.4 USB-Adapter (RTL8761BU or newer)
+Onboard - Raspberry Pi 5 Model B Rev 1.1 Bluetooth
+```
+
+Dropdown labels omit separate manufacturer/address/version/VID:PID fields.
+The installed-adapter list remains detailed, with hci numbers, product/chipset
+and address information, HCI version with revision, and USB VID:PID at the end.
+Onboard labels use hyphens instead of slashes.
 
 Both discovery and GATT reads use the selected controller. Sensors are read
 sequentially, with up to three bounded attempts per sensor. Errors on one sensor
@@ -62,9 +117,14 @@ it is not a continuously running daemon.
 
 ### MQTT (default for new installations)
 
-Configure the broker host, port (default `1883`), topic prefix (default `miflora`)
-and optional credentials. A broker such as the LoxBerry MQTT Gateway can be
-used; no Miniserver configuration is needed for MQTT-only operation.
+The plugin **always uses the broker configured in LoxBerry's MQTT Basics**.
+Host, port, username, password and TLS settings are read from the `Mqtt` section
+of `$LBSCONFIG/general.json` at each delivery, following LoxBerry's
+`mqtt_connectiondetails` schema (`Brokerhost`, `Brokerport`, `Brokeruser`,
+`Brokerpass` and the TLS flags). Missing or invalid central configuration is
+reported explicitly, without falling back to former plugin-local credentials.
+Configure only the topic prefix (default `miflora`) and enable/disable MQTT in
+the plugin. No Miniserver configuration is needed for MQTT-only operation.
 
 Each value is published separately with **QoS 1**, waiting for connection and
 publish acknowledgements before disconnecting. QoS 1 can deliver duplicates;
@@ -79,8 +139,10 @@ miflora/c47c8d66275b/moisture    4
 
 The topic is `<prefix>/<MAC without colons>/<sensor name>`, entirely lowercase
 as in previous releases. Wildcards (`+`, `#`) are not valid in the prefix.
-Username and password may be empty for a broker without authentication.
-MQTT uses plain TCP, **not TLS**; use it only on a trusted network.
+TLS and certificate verification follow MQTT Basics, including the local
+broker's TLS port and the external broker's certificate-validation setting.
+If certificate validation is enabled, the configured LoxBerry CA file must
+be readable. Without TLS, use MQTT only on a trusted network.
 
 ### UDP (optional)
 
@@ -94,16 +156,23 @@ C47C8D66275B.Moisture=4
 ```
 
 Both `general.json` and legacy `general.cfg` Miniserver configuration files are
-supported. Neither is read when UDP is disabled. UDP has no delivery
-acknowledgements.
+supported for UDP. MQTT reads `general.json` independently for MQTT Basics;
+it never requires a configured Miniserver. UDP has no delivery acknowledgements.
 
 ### Upgrading existing installations
 
-Existing settings and credentials are preserved, including UDP-only or
-MQTT-disabled configurations. MQTT is **not silently enabled** during an
-upgrade. `BTADAPTER=default` is added for compatibility with the previous
-`hci0` behaviour. Switch to MQTT and select the desired adapter in the settings
-page when ready. Fresh installs enable MQTT and disable UDP.
+Transport enablement, topics and UDP settings are preserved, including UDP-only
+or MQTT-disabled configurations. MQTT is **not silently enabled** during an
+upgrade, but when enabled it now uses MQTT Basics exclusively. Old plugin-local
+broker credentials are removed during migration or the next settings save.
+
+The `default` selection is preserved as Default - hci0. Legacy explicit `hciX`
+selections are migrated to the currently matching USB/Onboard type during upgrade.
+If that controller is absent, migration reports
+a warning and polling requires explicitly choosing USB or Onboard and saving;
+the plugin never guesses another type. Missing legacy selections are treated
+as the former `hci0` default during migration. Fresh installs default to Onboard,
+enable MQTT and disable UDP.
 
 ## Sensor values
 
@@ -123,11 +192,70 @@ Firmware 2.6.6 and newer is switched to live-data mode before reading. GATT
 characteristic UUIDs replace the old fixed ATT handles. Invalid or incomplete
 sensor responses are reported instead of being published as zero values.
 
+The standard live-data query already exposes all the measurements listed by
+the [FHEM Xiaomi Flower Sensor wiki](https://wiki.fhem.de/wiki/Xiaomi_Flower_Sensor).
+Conductivity is electrical conductivity, not a direct fertilizer concentration.
+Light is illuminance in lux (lx), not luminous flux in lumens; the linked wiki
+uses these terms inconsistently. The BLE device name is not the plant name
+configured in Flower Care. MAC address and discovery RSSI (dBm) are available in
+live diagnostics, not additional published measurements. History and other
+vendor-specific services are not part of this live-data query.
+
+### Virtual inputs in Loxone Config
+
+The Status and queries tab generates examples for all nine parameters using
+the saved topic prefix and an editable sensor MAC. Its MQTT/UDP selector only
+changes the help, not the active outputs.
+
+For direct UDP, add a virtual UDP input on the configured plugin UDP port and
+an input command for each numeric value, for example:
+
+```text
+5C857EB0F3AD.Temperature=\v
+```
+
+The help reads `Mqtt.Gatewayversion` and `Base.Version` from LoxBerry's
+`general.json`. Only `Gatewayversion=2` activates the v2 instructions; older
+installations without that field get the v1 guide. On LoxBerry 4 with v1 selected,
+the guide recommends switching to v2.
+
+For **MQTT Gateway v1**, subscribe to `miflora/#`, assign the desired topics to
+the Miniserver and enable HTTP forwarding. The plugin does not automatically
+register this subscription.
+
+For **MQTT Gateway v2**, select individual topics in **Subscriptions** and
+assign them to the Miniserver, rather than subscribing to a whole folder.
+Copy the input names from **Traffic**. In Loxone Config, create a virtual HTTP
+input as a folder, with `.` as its URL, and a virtual HTTP input command per
+numeric value. Set its exact name and use `\.` as command recognition to satisfy
+the configuration editor's required-field check. No HTTP polling is performed:
+the gateway pushes values via Miniserver API calls. Deploy the configuration.
+Only changed values are forwarded; wait for changes or use **Resend all** in
+Traffic to initialize newly created inputs.
+
+For the actual published topic
+`miflora/5c857eb0f3ad/temperature`, create the virtual input:
+
+```text
+miflora_5c857eb0f3ad_temperature
+```
+
+Case matters: `miflora_5C857EB0F3AD_Temperature` does not match the plugin's
+lowercase topics. The gateway replaces `/`, spaces and `%` with `_` for HTTP
+input names. If the gateway forwards via UDP, its own port and command format
+apply instead; do not confuse that with the plugin's direct UDP output.
+`Name`, `Firmware` and `PollTimeString` are text values: use a **virtual text
+input** instead of a virtual HTTP input command with the corresponding name.
+The MQTT Gateway can send these strings through the Miniserver API too.
+Numeric UDP recognition `\v` does not decode those strings. UDP-specific
+instructions and text-value limitations are shown only when UDP is selected.
+
 ## Troubleshooting
 
-Check **Polling and diagnostics** in the settings page and the plugin log
-`xiaomi-miflora.log`. A scan takes ten seconds; retries and multiple sensors can
-make the full poll take several minutes. Refresh the page to see the results.
+Check **Status and queries** and the per-query **Logs** tab. A scan takes ten
+seconds; retries and multiple sensors can make a full query take several
+minutes. Progress updates automatically. Startup failures are also recorded
+in `xiaomi-miflora.log`.
 
 On the LoxBerry host (adjust paths if the plugin has a different folder):
 
@@ -164,6 +292,9 @@ LoxBerry web rendering still need verification on a LoxBerry host with sensors.
 
 [LoxForum discussion](https://www.loxforum.com/forum/projektforen/loxberry/plugins/156917-plugin-xiaomi-miflora-flower-monitor)
 
+- 3.0.1: Default/USB/Onboard adapter selection with TeslaCmd-style labels and
+  detailed HCI diagnostics, central MQTT Basics integration, and restored
+  Save / Poll now / Refresh buttons.
 - 3.0.0: Bleak/BlueZ D-Bus, shared adapter inventory/selection, MQTT-first
   defaults, acknowledged MQTT delivery and structured bilingual settings.
 - 2022-02-13: 2.0.4, initial experimental MQTT support.

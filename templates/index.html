@@ -4,11 +4,19 @@
     .miflora-hint { font-size: .9em; color: #555; margin: .3em 0 1em; }
     .miflora-message { padding: .8em; border: 1px solid #888; white-space: pre-line; }
     .miflora-error { padding: .8em; border: 1px solid #b00; color: #b00; }
+    .miflora-toolbar { display: flex; align-items: center; gap: .7em; flex-wrap: wrap; }
+    .miflora-table { width: 100%; border-collapse: collapse; }
+    .miflora-table th, .miflora-table td { padding: .6em; border-bottom: 1px solid #ddd; text-align: left; vertical-align: top; }
+    .miflora-table code { overflow-wrap: anywhere; }
+    .miflora-table-wrap { overflow-x: auto; }
+    .miflora-save { text-align: center; }
+    #txtLastData, #sessionLog { font-family: monospace; height: 26em !important; overflow: auto !important; white-space: pre; }
 </style>
 <h1><TMPL_VAR NAME=heading ESCAPE=HTML></h1>
 <TMPL_LOOP errors><p class="miflora-error" role="alert"><TMPL_VAR NAME=error ESCAPE=HTML></p></TMPL_LOOP>
 <TMPL_IF message><p class="miflora-message" role="status"><TMPL_VAR NAME=message ESCAPE=HTML></p></TMPL_IF>
 <TMPL_VAR frmStart>
+<TMPL_IF isSettings>
 <section class="miflora-section">
     <h2><TMPL_VAR NAME=sectionGeneral ESCAPE=HTML></h2>
     <p class="miflora-hint"><TMPL_VAR NAME=hintGeneral ESCAPE=HTML></p>
@@ -38,18 +46,9 @@
     <p class="miflora-hint"><TMPL_VAR NAME=hintMQTT ESCAPE=HTML></p>
     <label for="chkMQTTEnabled"><TMPL_VAR NAME=lblMQTTEnabled ESCAPE=HTML></label>
     <TMPL_VAR chkMQTTEnabled>
-    <label for="txtMQTTBroker"><TMPL_VAR NAME=lblMQTTBroker ESCAPE=HTML></label>
-    <TMPL_VAR txtMQTTBroker>
-    <label for="txtMQTTPort"><TMPL_VAR NAME=lblMQTTPort ESCAPE=HTML></label>
-    <TMPL_VAR txtMQTTPort>
     <label for="txtMQTTTopic"><TMPL_VAR NAME=lblMQTTTopic ESCAPE=HTML></label>
     <TMPL_VAR txtMQTTTopic>
     <p class="miflora-hint"><TMPL_VAR NAME=hintMQTTTopic ESCAPE=HTML></p>
-    <label for="txtMQTTUsername"><TMPL_VAR NAME=lblMQTTUsername ESCAPE=HTML></label>
-    <TMPL_VAR txtMQTTUsername>
-    <label for="txtMQTTPassword"><TMPL_VAR NAME=lblMQTTPassword ESCAPE=HTML></label>
-    <TMPL_VAR txtMQTTPassword>
-    <p class="miflora-hint"><TMPL_VAR NAME=hintMQTTAuth ESCAPE=HTML></p>
 </section>
 <section class="miflora-section">
     <h2><TMPL_VAR NAME=sectionUDP ESCAPE=HTML></h2>
@@ -61,18 +60,95 @@
     <label for="txtMsUDPPort"><TMPL_VAR NAME=lblMsUDPPort ESCAPE=HTML></label>
     <TMPL_VAR txtMsUDPPort>
 </section>
-<TMPL_VAR btnSave>
+<div class="miflora-save"><TMPL_VAR btnSave></div>
+</TMPL_IF>
+<TMPL_IF isStatus>
 <section class="miflora-section">
     <h2><TMPL_VAR NAME=sectionDiagnostics ESCAPE=HTML></h2>
     <p class="miflora-hint"><TMPL_VAR NAME=hintDiagnostics ESCAPE=HTML></p>
     <TMPL_VAR btnPoll>
     <label for="txtLastData"><TMPL_VAR NAME=lblLastData ESCAPE=HTML></label>
     <TMPL_VAR txtLastData>
-    <TMPL_VAR btnRefresh>
+    <div class="miflora-toolbar">
+        <TMPL_VAR btnRefresh>
+        <label for="dataAutoScroll"><input type="checkbox" id="dataAutoScroll" data-role="none" checked> <TMPL_VAR NAME=autoScroll ESCAPE=HTML></label>
+        <a href="index.cgi?action=download-data" data-role="button" data-inline="true" data-ajax="false" download><TMPL_VAR NAME=download ESCAPE=HTML></a>
+    </div>
+    <p id="liveError" class="miflora-error" role="alert" hidden></p>
 </section>
+<section class="miflora-section" id="loxoneInputs" data-topic="<TMPL_VAR NAME=topicPrefix ESCAPE=HTML>">
+    <h2><TMPL_VAR NAME=sectionLoxone ESCAPE=HTML></h2>
+    <p class="miflora-hint"><TMPL_VAR NAME=hintLoxone ESCAPE=HTML></p>
+    <label for="inputTransport"><TMPL_VAR NAME=transport ESCAPE=HTML></label>
+    <select id="inputTransport" data-role="none">
+        <option value="mqtt"><TMPL_VAR NAME=mqttRecommended ESCAPE=HTML></option>
+        <option value="udp">UDP</option>
+    </select>
+    <label for="sensorMac"><TMPL_VAR NAME=sensorMac ESCAPE=HTML></label>
+    <input id="sensorMac" type="text" data-role="none" value="5C:85:7E:B0:F3:AD" maxlength="17">
+    <p id="macError" role="alert" class="miflora-error" hidden><TMPL_VAR NAME=errMAC ESCAPE=HTML></p>
+    <div id="mqttHelp">
+        <TMPL_IF gatewayDetected>
+            <TMPL_IF gatewayV2>
+                <p><span style="color:green; font-weight:bold"><TMPL_VAR NAME=gatewayV2Active ESCAPE=HTML></span></p>
+                <p><TMPL_VAR hintGatewayV2></p>
+                <ol>
+                    <li><TMPL_VAR gatewayStep1></li>
+                    <li><TMPL_VAR gatewayStep2></li>
+                    <li><TMPL_VAR gatewayStep3></li>
+                    <li><TMPL_VAR gatewayStep4></li>
+                    <li><TMPL_VAR gatewayStep5></li>
+                </ol>
+                <p><TMPL_VAR gatewayChangedValues></p>
+            <TMPL_ELSE>
+                <TMPL_IF recommendGatewayV2><p><span style="color:orange; font-weight:bold"><TMPL_VAR NAME=gatewayV2Recommended ESCAPE=HTML></span></p></TMPL_IF>
+                <p><TMPL_VAR hintLoxoneMQTT></p>
+                <p><TMPL_VAR NAME=subscription ESCAPE=HTML> <code id="mqttSubscription"></code></p>
+            </TMPL_IF>
+            <TMPL_IF mqttConfigured>
+                <p style="color:green"><b><TMPL_VAR NAME=gatewayFound ESCAPE=HTML></b></p>
+            <TMPL_ELSE>
+                <p style="color:red"><b><TMPL_VAR NAME=gatewayFound ESCAPE=HTML></b></p>
+            </TMPL_IF>
+        </TMPL_IF>
+        <p class="miflora-hint"><TMPL_VAR hintTextInputs></p>
+    </div>
+    <div id="udpHelp" hidden>
+        <p><TMPL_VAR hintLoxoneUDP></p>
+        <p class="miflora-hint"><TMPL_VAR NAME=hintGatewayUDP ESCAPE=HTML></p>
+        <p class="miflora-hint"><TMPL_VAR NAME=hintUDPText ESCAPE=HTML></p>
+    </div>
+    <div class="miflora-table-wrap">
+    <table class="miflora-table">
+        <thead><tr><th><TMPL_VAR NAME=parameter ESCAPE=HTML></th><th><TMPL_VAR NAME=description ESCAPE=HTML></th><th><TMPL_VAR NAME=unit ESCAPE=HTML></th><th><span id="inputColumn"><TMPL_VAR NAME=virtualInput ESCAPE=HTML></span></th><th class="topicColumn">MQTT Topic</th></tr></thead>
+        <tbody>
+            <tr data-key="Name"><td>Name</td><td><TMPL_VAR NAME=valueName ESCAPE=HTML></td><td><TMPL_VAR NAME=text ESCAPE=HTML></td><td><code class="inputExample"></code></td><td class="topicColumn"><code class="topicExample"></code></td></tr>
+            <tr data-key="PollTime"><td>PollTime</td><td><TMPL_VAR NAME=valuePollTime ESCAPE=HTML></td><td>s</td><td><code class="inputExample"></code></td><td class="topicColumn"><code class="topicExample"></code></td></tr>
+            <tr data-key="PollTimeString"><td>PollTimeString</td><td><TMPL_VAR NAME=valuePollTimeString ESCAPE=HTML></td><td><TMPL_VAR NAME=text ESCAPE=HTML></td><td><code class="inputExample"></code></td><td class="topicColumn"><code class="topicExample"></code></td></tr>
+            <tr data-key="Firmware"><td>Firmware</td><td><TMPL_VAR NAME=valueFirmware ESCAPE=HTML></td><td><TMPL_VAR NAME=text ESCAPE=HTML></td><td><code class="inputExample"></code></td><td class="topicColumn"><code class="topicExample"></code></td></tr>
+            <tr data-key="Temperature"><td>Temperature</td><td><TMPL_VAR NAME=valueTemperature ESCAPE=HTML></td><td>°C</td><td><code class="inputExample"></code></td><td class="topicColumn"><code class="topicExample"></code></td></tr>
+            <tr data-key="Moisture"><td>Moisture</td><td><TMPL_VAR NAME=valueMoisture ESCAPE=HTML></td><td>%</td><td><code class="inputExample"></code></td><td class="topicColumn"><code class="topicExample"></code></td></tr>
+            <tr data-key="Light"><td>Light</td><td><TMPL_VAR NAME=valueLight ESCAPE=HTML></td><td>lx</td><td><code class="inputExample"></code></td><td class="topicColumn"><code class="topicExample"></code></td></tr>
+            <tr data-key="Conductivity"><td>Conductivity</td><td><TMPL_VAR NAME=valueConductivity ESCAPE=HTML></td><td>µS/cm</td><td><code class="inputExample"></code></td><td class="topicColumn"><code class="topicExample"></code></td></tr>
+            <tr data-key="Battery"><td>Battery</td><td><TMPL_VAR NAME=valueBattery ESCAPE=HTML></td><td>%</td><td><code class="inputExample"></code></td><td class="topicColumn"><code class="topicExample"></code></td></tr>
+        </tbody>
+    </table>
+    </div>
+    <p class="miflora-hint"><TMPL_VAR NAME=hintSensorInfo ESCAPE=HTML> <a href="https://wiki.fhem.de/wiki/Xiaomi_Flower_Sensor" target="_blank" rel="noopener">FHEM Wiki</a></p>
+</section>
+</TMPL_IF>
+<TMPL_IF isLogs>
+<section class="miflora-section">
+    <h2><TMPL_VAR NAME=tablogs ESCAPE=HTML></h2>
+    <p class="miflora-hint"><TMPL_VAR NAME=hintLogs ESCAPE=HTML></p>
+    <TMPL_VAR loglist>
+</section>
+</TMPL_IF>
 <TMPL_VAR frmEnd>
+<div id="mifloraMessages" hidden data-polling="<TMPL_VAR NAME=txtPollingMessage ESCAPE=HTML>" data-error="<TMPL_VAR NAME=errRequest ESCAPE=HTML>" data-virtual="<TMPL_VAR NAME=virtualInput ESCAPE=HTML>" data-udp="<TMPL_VAR NAME=udpRecognition ESCAPE=HTML>"></div>
+<script src="miflora.js" defer></script>
 <script>
     $('select[name=chkPluginEnabled], select[name=chkLocaltime], select[name=chkMQTTEnabled], select[name=chkUDPEnabled]')
         .attr('data-role', 'flipswitch');
-    $('#txtMQTTPort, #txtMsUDPPort').attr({type: 'number', min: 1, max: 65535});
+    $('#txtMsUDPPort').attr({type: 'number', min: 1, max: 65535});
 </script>
