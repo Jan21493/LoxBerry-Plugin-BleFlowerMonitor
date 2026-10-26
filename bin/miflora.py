@@ -26,9 +26,12 @@ LEGACY_MQTT_KEYS = ("MQTTBROKER", "MQTTPORT", "MQTTUSERNAME", "MQTTPASSWORD")
 
 def read_config(filename):
     config = configparser.ConfigParser(interpolation=None)
-    if not config.read(filename):
+    if not config.read(filename, encoding="utf-8"):
         raise ValueError(f"Plugin configuration file missing: {filename}")
-    settings = config["MIFLORA"]
+    section = "FLOWERMON" if config.has_section("FLOWERMON") else "MIFLORA"
+    if not config.has_section(section):
+        raise ValueError(f"Plugin configuration section missing: FLOWERMON")
+    settings = config[section]
     for key in LEGACY_MQTT_KEYS:
         settings.pop(key, None)
     # Config::Simple quotes and escapes punctuation when saving the web form.
@@ -44,7 +47,7 @@ def read_config(filename):
     if settings.getint("POLLFREQUENCY", 12) not in {1, 2, 4, 8, 12, 24}:
         raise ValueError("Invalid polling frequency")
     if settings.get("MQTTENABLED", "1") == "1":
-        topic = settings.get("MQTTTOPIC", "miflora")
+        topic = settings.get("MQTTTOPIC", "flowermon")
         if not topic.strip("/ \t") or any(char in topic for char in "+#\0"):
             raise ValueError("MQTT topic must be nonempty and contain no wildcards")
     if settings.get("UDPENABLED", "0") == "1":
@@ -53,18 +56,23 @@ def read_config(filename):
 
 
 def migrate_config(filename):
-    """Persist type-based adapter selection once, before hci numbers can change."""
+    """Migrate the config section and persist adapter type before hci numbers change."""
     config = configparser.ConfigParser(interpolation=None)
     config.optionxform = str
-    if not config.read(filename):
+    if not config.read(filename, encoding="utf-8"):
         raise ValueError(f"Plugin configuration file missing: {filename}")
-    settings = config["MIFLORA"]
+    if not config.has_section("FLOWERMON"):
+        if not config.has_section("MIFLORA"):
+            raise ValueError("Plugin configuration section missing: FLOWERMON")
+        config["FLOWERMON"] = dict(config["MIFLORA"])
+        config.remove_section("MIFLORA")
+    settings = config["FLOWERMON"]
     selection = settings.get("BTADAPTER", "serial")
     if selection not in {"default", "usb", "serial"}:
         settings["BTADAPTER"] = adapter_kind(selection, detect_adapters())
     for key in LEGACY_MQTT_KEYS:
         settings.pop(key, None)
-    with Path(filename).open("w") as handle:
+    with Path(filename).open("w", encoding="utf-8") as handle:
         config.write(handle)
 
 
@@ -88,7 +96,7 @@ def mqtt_connectiondetails(directory=None):
     """Read the MQTT Basics schema used by LoxBerry::IO and loxberry.io."""
     directory = Path(directory or os.environ.get("LBSCONFIG", "/opt/loxberry/config/system"))
     try:
-        with (directory / "general.json").open() as handle:
+        with (directory / "general.json").open(encoding="utf-8") as handle:
             mqtt = json.load(handle)["Mqtt"]
         if not isinstance(mqtt, dict):
             raise ValueError("Mqtt must be an object")
@@ -128,7 +136,7 @@ def miniserver_address(settings, directory):
     server_id = settings.get("MINISERVER", "MINISERVER1").removeprefix("MINISERVER")
     directory = Path(directory)
     if (directory / "general.json").exists():
-        with (directory / "general.json").open() as handle:
+        with (directory / "general.json").open(encoding="utf-8") as handle:
             servers = json.load(handle)["Miniserver"]
         if server_id not in servers:
             raise ValueError(f"Miniserver {server_id} not found in general.json")
@@ -183,7 +191,7 @@ def mqtt_publish(settings, samples):
         for address, values in samples:
             for key, value in values.items():
                 # Keep the topic format and lowercasing used by earlier releases.
-                topic = f"{settings.get('MQTTTOPIC', 'miflora')}/{address}/{key}".lower()
+                topic = f"{settings.get('MQTTTOPIC', 'flowermon')}/{address}/{key}".lower()
                 message = client.publish(topic, str(value), qos=1)
                 if message.rc != mqtt.MQTT_ERR_SUCCESS:
                     raise ConnectionError(f"MQTT publish failed for {topic}: {message.rc}")
@@ -221,7 +229,7 @@ async def poll(settings, datafile):
                  {"serial": "Onboard", "usb": "USB", "default": "Default - hci0"}.get(selection, selection),
                  selected.label)
     logging.info("Scanning with %s using Bleak / BlueZ D-Bus", adapter)
-    datafile.write_text(f"Polling via {adapter} (Bleak / BlueZ D-Bus)...\n")
+    datafile.write_text(f"Polling via {adapter} (Bleak / BlueZ D-Bus)...\n", encoding="utf-8")
     try:
         devices = await scan(adapter)
     except BleakError as error:
@@ -235,7 +243,7 @@ async def poll(settings, datafile):
                      {"serial": "Onboard", "usb": "USB", "default": "Default - hci0"}.get(selection, selection),
                      selected.label)
         logging.info("Retrying scan with %s", adapter)
-        datafile.write_text(f"Polling via {adapter} (Bleak / BlueZ D-Bus)...\n")
+        datafile.write_text(f"Polling via {adapter} (Bleak / BlueZ D-Bus)...\n", encoding="utf-8")
         devices = await scan(adapter)
     logging.info("Scan finished: %s MiFlora sensor(s) found", len(devices))
     samples = []
@@ -246,7 +254,7 @@ async def poll(settings, datafile):
             values = await read_sample(device)
             values.update(timestamp_values(settings.get("LOCALTIME", "1") == "1"))
             samples.append((device.address.replace(":", "").upper(), values))
-            with datafile.open("a") as handle:
+            with datafile.open("a", encoding="utf-8") as handle:
                 for key, value in values.items():
                     handle.write(f"{device.address.replace(':', '').upper()}.{key}={value}\n")
             logging.info("Sensor %s read successfully", device.address, extra={"success": True})
@@ -261,7 +269,7 @@ async def poll(settings, datafile):
     if not devices:
         lines.append("No MiFlora sensors found. Check range, batteries and adapter selection.")
         logging.warning(lines[-1])
-    datafile.write_text("\n".join(lines + errors) + "\n")
+    datafile.write_text("\n".join(lines + errors) + "\n", encoding="utf-8")
     for line in lines:
         logging.info(line)
 
@@ -272,7 +280,7 @@ async def poll(settings, datafile):
         except (OSError, ValueError, RuntimeError) as error:
             logging.error("MQTT delivery failed: %s", error)
             errors.append(f"ERROR MQTT: {error}")
-            with datafile.open("a") as handle:
+            with datafile.open("a", encoding="utf-8") as handle:
                 handle.write(errors[-1] + "\n")
     if samples and settings.get("UDPENABLED", "0") == "1":
         try:
@@ -282,7 +290,7 @@ async def poll(settings, datafile):
         except (OSError, ValueError, KeyError, configparser.Error) as error:
             logging.error("UDP delivery failed: %s", error)
             errors.append(f"ERROR UDP: {error}")
-            with datafile.open("a") as handle:
+            with datafile.open("a", encoding="utf-8") as handle:
                 handle.write(errors[-1] + "\n")
     return 1 if errors else 0
 
@@ -323,7 +331,7 @@ def run(args):
                     raise startup_error
                 if settings.get("ENABLED", "1") != "1":
                     logging.warning("Plugin disabled; enable it in Settings before polling")
-                    datafile.write_text("Plugin disabled; no scan performed.\n")
+                    datafile.write_text("Plugin disabled; no scan performed.\n", encoding="utf-8")
                     outcome["status"] = "DISABLED"
                     return 0
                 if settings.get("MQTTENABLED", "1") != "1" and settings.get("UDPENABLED", "0") != "1":
@@ -332,7 +340,7 @@ def run(args):
                 outcome["status"] = "ERROR" if result else "OK"
                 return result
             except (BleakError, OSError, ValueError, RuntimeError, KeyError, configparser.Error) as error:
-                with datafile.open("a") as handle:
+                with datafile.open("a", encoding="utf-8") as handle:
                     handle.write(f"ERROR: {error}\n")
                 logging.exception("Bluetooth polling failed: %s", error)
                 return 1
@@ -367,7 +375,7 @@ def main():
         level=logging.DEBUG if args.debug else logging.INFO,
         format="%(asctime)s %(levelname)s %(message)s",
         handlers=[
-            RotatingFileHandler(args.logfile, maxBytes=1024 * 1024, backupCount=1),
+            RotatingFileHandler(args.logfile, maxBytes=1024 * 1024, backupCount=1, encoding="utf-8"),
             logging.StreamHandler(),
         ],
     )

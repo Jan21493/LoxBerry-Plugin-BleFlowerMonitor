@@ -10,30 +10,50 @@
     .miflora-table code { overflow-wrap: anywhere; }
     .miflora-table-wrap { overflow-x: auto; }
     .miflora-save { text-align: center; }
-    #txtLastData, #sessionLog { font-family: monospace; height: 26em !important; overflow: auto !important; white-space: pre; }
+    .miflora-field { display: grid; grid-template-columns: minmax(12em, 25%) minmax(0, 1fr); align-items: center; gap: .5em 1em; margin: .8em 0; }
+    .miflora-field > label { margin: 0 !important; }
+    .miflora-field .ui-input-text, .miflora-field .ui-select { margin: 0; }
+    .miflora-field .miflora-hint { margin-bottom: 0; }
+    .miflora-subsection { margin: 1em 0 1em 1.5em; }
+    @media (max-width: 700px) {
+        .miflora-field { grid-template-columns: minmax(0, 1fr); }
+        .miflora-subsection { margin-left: .5em; }
+    }
+    #txtLastData { font-family: monospace; height: 26em !important; max-height: 65vh; width: 100%; box-sizing: border-box; overflow: auto !important; white-space: pre; resize: vertical; }
 </style>
 <h1><TMPL_VAR NAME=heading ESCAPE=HTML></h1>
-<TMPL_LOOP errors><p class="miflora-error" role="alert"><TMPL_VAR NAME=error ESCAPE=HTML></p></TMPL_LOOP>
+<TMPL_IF isSettings><p class="miflora-intro"><TMPL_VAR pluginIntro></p></TMPL_IF>
+<TMPL_LOOP errors><p class="miflora-error" role="alert"><TMPL_VAR error></p></TMPL_LOOP>
 <TMPL_IF message><p class="miflora-message" role="status"><TMPL_VAR NAME=message ESCAPE=HTML></p></TMPL_IF>
 <TMPL_VAR frmStart>
 <TMPL_IF isSettings>
 <section class="miflora-section">
     <h2><TMPL_VAR NAME=sectionGeneral ESCAPE=HTML></h2>
     <p class="miflora-hint"><TMPL_VAR NAME=hintGeneral ESCAPE=HTML></p>
-    <label for="chkPluginEnabled"><TMPL_VAR NAME=lblPluginEnabled ESCAPE=HTML></label>
-    <TMPL_VAR chkPluginEnabled>
-    <label for="selPollFrequency"><TMPL_VAR NAME=lblPollFrequency ESCAPE=HTML></label>
-    <TMPL_VAR selPollFrequency>
-    <label for="chkLocaltime"><TMPL_VAR NAME=lblLocaltime ESCAPE=HTML></label>
-    <TMPL_VAR chkLocaltime>
-    <p class="miflora-hint"><TMPL_VAR NAME=hintLocaltime ESCAPE=HTML></p>
+    <div class="miflora-field">
+        <label for="chkPluginEnabled"><TMPL_VAR NAME=lblPluginEnabled ESCAPE=HTML></label>
+        <div><TMPL_VAR chkPluginEnabled></div>
+    </div>
+    <div class="miflora-field">
+        <label for="selPollFrequency"><TMPL_VAR NAME=lblPollFrequency ESCAPE=HTML></label>
+        <div><TMPL_VAR selPollFrequency></div>
+    </div>
+    <div class="miflora-field">
+        <label for="chkLocaltime"><TMPL_VAR NAME=lblLocaltime ESCAPE=HTML></label>
+        <div><TMPL_VAR chkLocaltime>
+            <p class="miflora-hint"><TMPL_VAR hintLocaltime></p>
+        </div>
+    </div>
 </section>
 <section class="miflora-section">
     <h2><TMPL_VAR NAME=sectionBluetooth ESCAPE=HTML></h2>
     <p class="miflora-hint"><TMPL_VAR NAME=hintBluetooth ESCAPE=HTML></p>
-    <label for="selBTAdapter"><TMPL_VAR NAME=lblBTAdapter ESCAPE=HTML></label>
-    <TMPL_VAR selBTAdapter>
-    <p class="miflora-hint"><TMPL_VAR NAME=hintBTAdapter ESCAPE=HTML></p>
+    <div class="miflora-field">
+        <label for="selBTAdapter"><TMPL_VAR NAME=lblBTAdapter ESCAPE=HTML></label>
+        <div><TMPL_VAR selBTAdapter>
+            <p class="miflora-hint"><TMPL_VAR NAME=hintBTAdapter ESCAPE=HTML></p>
+        </div>
+    </div>
     <h3><TMPL_VAR NAME=lblDetectedAdapters ESCAPE=HTML></h3>
     <TMPL_IF adapters>
         <ul><TMPL_LOOP adapters><li><TMPL_VAR NAME=label ESCAPE=HTML></li></TMPL_LOOP></ul>
@@ -42,35 +62,51 @@
     </TMPL_IF>
 </section>
 <section class="miflora-section">
-    <h2><TMPL_VAR NAME=sectionMQTT ESCAPE=HTML></h2>
-    <p class="miflora-hint"><TMPL_VAR NAME=hintMQTT ESCAPE=HTML></p>
-    <label for="chkMQTTEnabled"><TMPL_VAR NAME=lblMQTTEnabled ESCAPE=HTML></label>
-    <TMPL_VAR chkMQTTEnabled>
-    <label for="txtMQTTTopic"><TMPL_VAR NAME=lblMQTTTopic ESCAPE=HTML></label>
-    <TMPL_VAR txtMQTTTopic>
-    <p class="miflora-hint"><TMPL_VAR NAME=hintMQTTTopic ESCAPE=HTML></p>
-</section>
-<section class="miflora-section">
-    <h2><TMPL_VAR NAME=sectionUDP ESCAPE=HTML></h2>
+    <h2><TMPL_VAR NAME=sectionMiniserver ESCAPE=HTML></h2>
+    <section class="miflora-subsection">
+    <h3><TMPL_VAR NAME=sectionMQTT ESCAPE=HTML></h3>
+    <p class="miflora-hint"><TMPL_VAR hintMQTT></p>
+    <div class="miflora-field">
+        <label for="chkMQTTEnabled"><TMPL_VAR NAME=lblMQTTEnabled ESCAPE=HTML></label>
+        <div><TMPL_VAR chkMQTTEnabled></div>
+    </div>
+    <div class="miflora-field">
+        <label for="txtMQTTTopic"><TMPL_VAR NAME=lblMQTTTopic ESCAPE=HTML></label>
+        <div><TMPL_VAR txtMQTTTopic>
+            <p class="miflora-hint"><TMPL_VAR hintMQTTTopic></p>
+        </div>
+    </div>
+    </section>
+    <section class="miflora-subsection">
+    <h3><TMPL_VAR NAME=sectionUDP ESCAPE=HTML></h3>
     <p class="miflora-hint"><TMPL_VAR NAME=hintUDP ESCAPE=HTML></p>
-    <label for="chkUDPEnabled"><TMPL_VAR NAME=lblUDPEnabled ESCAPE=HTML></label>
-    <TMPL_VAR chkUDPEnabled>
-    <label for="selMiniServer"><TMPL_VAR NAME=lblMiniServer ESCAPE=HTML></label>
-    <TMPL_VAR selMiniServer>
-    <label for="txtMsUDPPort"><TMPL_VAR NAME=lblMsUDPPort ESCAPE=HTML></label>
-    <TMPL_VAR txtMsUDPPort>
+    <div class="miflora-field">
+        <label for="chkUDPEnabled"><TMPL_VAR NAME=lblUDPEnabled ESCAPE=HTML></label>
+        <div><TMPL_VAR chkUDPEnabled></div>
+    </div>
+    <div class="miflora-field">
+        <label for="selMiniServer"><TMPL_VAR NAME=lblMiniServer ESCAPE=HTML></label>
+        <div><TMPL_VAR selMiniServer></div>
+    </div>
+    <div class="miflora-field">
+        <label for="txtMsUDPPort"><TMPL_VAR NAME=lblMsUDPPort ESCAPE=HTML></label>
+        <div><TMPL_VAR txtMsUDPPort></div>
+    </div>
+    </section>
 </section>
 <div class="miflora-save"><TMPL_VAR btnSave></div>
 </TMPL_IF>
 <TMPL_IF isStatus>
 <section class="miflora-section">
     <h2><TMPL_VAR NAME=sectionDiagnostics ESCAPE=HTML></h2>
-    <p class="miflora-hint"><TMPL_VAR NAME=hintDiagnostics ESCAPE=HTML></p>
-    <TMPL_VAR btnPoll>
+    <p class="miflora-hint"><TMPL_VAR hintDiagnostics></p>
+    <div class="miflora-toolbar">
+        <TMPL_VAR btnPoll>
+        <button type="button" id="clearOutput" data-inline="true"><TMPL_VAR NAME=btnClearOutput ESCAPE=HTML></button>
+    </div>
     <label for="txtLastData"><TMPL_VAR NAME=lblLastData ESCAPE=HTML></label>
     <TMPL_VAR txtLastData>
     <div class="miflora-toolbar">
-        <TMPL_VAR btnRefresh>
         <label for="dataAutoScroll"><input type="checkbox" id="dataAutoScroll" data-role="none" checked> <TMPL_VAR NAME=autoScroll ESCAPE=HTML></label>
         <a href="index.cgi?action=download-data" data-role="button" data-inline="true" data-ajax="false" download><TMPL_VAR NAME=download ESCAPE=HTML></a>
     </div>
@@ -78,19 +114,45 @@
 </section>
 <section class="miflora-section" id="loxoneInputs" data-topic="<TMPL_VAR NAME=topicPrefix ESCAPE=HTML>">
     <h2><TMPL_VAR NAME=sectionLoxone ESCAPE=HTML></h2>
-    <p class="miflora-hint"><TMPL_VAR NAME=hintLoxone ESCAPE=HTML></p>
-    <label for="inputTransport"><TMPL_VAR NAME=transport ESCAPE=HTML></label>
-    <select id="inputTransport" data-role="none">
-        <option value="mqtt"><TMPL_VAR NAME=mqttRecommended ESCAPE=HTML></option>
-        <option value="udp">UDP</option>
-    </select>
-    <label for="sensorMac"><TMPL_VAR NAME=sensorMac ESCAPE=HTML></label>
-    <input id="sensorMac" type="text" data-role="none" value="5C:85:7E:B0:F3:AD" maxlength="17">
+    <p class="miflora-hint"><TMPL_VAR hintLoxone></p>
+    <div class="miflora-field">
+        <label for="inputTransport"><TMPL_VAR NAME=transport ESCAPE=HTML></label>
+        <div><select id="inputTransport" data-role="none">
+            <option value="mqtt"<TMPL_IF transportMQTTSelected> selected</TMPL_IF>><TMPL_VAR NAME=mqttRecommended ESCAPE=HTML></option>
+            <option value="udp"<TMPL_IF transportUDPSelected> selected</TMPL_IF>>UDP</option>
+        </select></div>
+    </div>
+    <div class="miflora-field">
+        <label for="sensorSelect"><TMPL_VAR NAME=sensorMac ESCAPE=HTML></label>
+        <div><input id="sensorMac" type="text" data-role="none" aria-label="<TMPL_VAR NAME=sensorMac ESCAPE=HTML>" value="<TMPL_VAR NAME=selectedSensorMac ESCAPE=HTML>" maxlength="17" hidden>
+            <select id="sensorSelect" data-role="none" aria-label="<TMPL_VAR NAME=sensorMac ESCAPE=HTML>">
+                <TMPL_IF sensorAddresses>
+                    <TMPL_LOOP sensorAddresses><option value="<TMPL_VAR NAME=address ESCAPE=HTML>"><TMPL_VAR NAME=address ESCAPE=HTML></option></TMPL_LOOP>
+                <TMPL_ELSE>
+                    <option value="5C:85:7E:B0:F3:AD">5C:85:7E:B0:F3:AD (<TMPL_VAR NAME=exampleMac ESCAPE=HTML>)</option>
+                </TMPL_IF>
+            </select>
+            <button type="button" id="editMac" data-inline="true"><TMPL_VAR NAME=btnEditMac ESCAPE=HTML></button>
+        </div>
+    </div>
     <p id="macError" role="alert" class="miflora-error" hidden><TMPL_VAR NAME=errMAC ESCAPE=HTML></p>
     <div id="mqttHelp">
         <TMPL_IF gatewayDetected>
+            <p class="miflora-gateway-status">
+                <TMPL_IF mqttConfigured>
+                    <span style="color:green"><b><TMPL_VAR gatewayFound></b></span>
+                <TMPL_ELSE>
+                    <span style="color:red"><b><TMPL_VAR gatewayFound></b></span>
+                </TMPL_IF>
+                <TMPL_IF showGatewayVersion>
+                    <TMPL_IF gatewayV2>
+                        <span style="color:green; font-weight:bold"><TMPL_VAR NAME=gatewayV2Active ESCAPE=HTML></span>
+                    <TMPL_ELSE>
+                        <span style="color:orange; font-weight:bold"><TMPL_VAR NAME=gatewayV2Recommended ESCAPE=HTML></span>
+                    </TMPL_IF>
+                </TMPL_IF>
+            </p>
             <TMPL_IF gatewayV2>
-                <p><span style="color:green; font-weight:bold"><TMPL_VAR NAME=gatewayV2Active ESCAPE=HTML></span></p>
                 <p><TMPL_VAR hintGatewayV2></p>
                 <ol>
                     <li><TMPL_VAR gatewayStep1></li>
@@ -101,14 +163,8 @@
                 </ol>
                 <p><TMPL_VAR gatewayChangedValues></p>
             <TMPL_ELSE>
-                <TMPL_IF recommendGatewayV2><p><span style="color:orange; font-weight:bold"><TMPL_VAR NAME=gatewayV2Recommended ESCAPE=HTML></span></p></TMPL_IF>
                 <p><TMPL_VAR hintLoxoneMQTT></p>
                 <p><TMPL_VAR NAME=subscription ESCAPE=HTML> <code id="mqttSubscription"></code></p>
-            </TMPL_IF>
-            <TMPL_IF mqttConfigured>
-                <p style="color:green"><b><TMPL_VAR NAME=gatewayFound ESCAPE=HTML></b></p>
-            <TMPL_ELSE>
-                <p style="color:red"><b><TMPL_VAR NAME=gatewayFound ESCAPE=HTML></b></p>
             </TMPL_IF>
         </TMPL_IF>
         <p class="miflora-hint"><TMPL_VAR hintTextInputs></p>
@@ -134,18 +190,18 @@
         </tbody>
     </table>
     </div>
-    <p class="miflora-hint"><TMPL_VAR NAME=hintSensorInfo ESCAPE=HTML> <a href="https://wiki.fhem.de/wiki/Xiaomi_Flower_Sensor" target="_blank" rel="noopener">FHEM Wiki</a></p>
+    <p class="miflora-hint"><TMPL_VAR NAME=hintSensorInfo ESCAPE=HTML></p>
 </section>
 </TMPL_IF>
 <TMPL_IF isLogs>
 <section class="miflora-section">
     <h2><TMPL_VAR NAME=tablogs ESCAPE=HTML></h2>
-    <p class="miflora-hint"><TMPL_VAR NAME=hintLogs ESCAPE=HTML></p>
+    <p class="miflora-hint"><TMPL_VAR hintLogs></p>
     <TMPL_VAR loglist>
 </section>
 </TMPL_IF>
 <TMPL_VAR frmEnd>
-<div id="mifloraMessages" hidden data-polling="<TMPL_VAR NAME=txtPollingMessage ESCAPE=HTML>" data-error="<TMPL_VAR NAME=errRequest ESCAPE=HTML>" data-virtual="<TMPL_VAR NAME=virtualInput ESCAPE=HTML>" data-udp="<TMPL_VAR NAME=udpRecognition ESCAPE=HTML>"></div>
+<div id="mifloraMessages" hidden data-polling="<TMPL_VAR NAME=txtPollingMessage ESCAPE=HTML>" data-error="<TMPL_VAR NAME=errRequest ESCAPE=HTML>" data-virtual="<TMPL_VAR NAME=virtualInput ESCAPE=HTML>" data-udp="<TMPL_VAR NAME=udpRecognition ESCAPE=HTML>" data-example="<TMPL_VAR NAME=exampleMac ESCAPE=HTML>"></div>
 <script src="miflora.js" defer></script>
 <script>
     $('select[name=chkPluginEnabled], select[name=chkLocaltime], select[name=chkMQTTEnabled], select[name=chkUDPEnabled]')

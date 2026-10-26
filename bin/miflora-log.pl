@@ -3,6 +3,7 @@
 use strict;
 use warnings;
 use JSON::PP qw(decode_json);
+use Encode qw(encode);
 use LoxBerry::Log;
 
 my ($filename, $package, $level) = @ARGV;
@@ -17,7 +18,11 @@ while (my $line = <STDIN>) {
     my $record = decode_json($line);
     my $method = $record->{method};
     die "Invalid log method" unless $method =~ /\A(?:LOGSTART|LOGEND|INF|OK|DEB|WARN|ERR)\z/;
-    $log->$method($record->{message});
+    # The native viewer treats message text as HTML; D-Bus reprs must not become tags.
+    my $message = $record->{message};
+    $message =~ tr/<>/()/;
+    # LoxBerry::Log writes to a raw filehandle, so pass UTF-8 bytes, not characters.
+    $log->$method(encode('UTF-8', $message));
     if ($method eq 'LOGSTART') { print "READY\n"; }
     last if $method eq 'LOGEND';
 }
