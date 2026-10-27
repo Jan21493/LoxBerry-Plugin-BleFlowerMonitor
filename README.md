@@ -72,8 +72,11 @@ This uses the established Perl API and does not require the optional Python
 LoxBerry library on older installations.
 Plugin log messages are always English and are defined directly in the code,
 independently of the web UI language. The RSSI estimate is shown as
-`approx. ... m line of sight without walls`. Only web UI text uses the German
-and English language files.
+`approx. ... m line of sight without walls`. The web UI and help are available in
+German (de), English (en), Spanish (es), Czech (cs), Dutch (nl), Polish (pl)
+and Slovak (sk), using LoxBerry's language selection. Plugin-related messages
+use **Flower Monitor**; MiFlora still identifies the sensors, and existing
+configuration/log paths and MQTT topics remain unchanged.
 Logs and progress files use UTF-8, including the Perl bridge to the raw
 LoxBerry log writer.
 The bridge replaces angle brackets in message text with parentheses because the

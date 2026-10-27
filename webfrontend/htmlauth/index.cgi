@@ -61,13 +61,13 @@ if ($action ne '') {
             }
             close($lock);
         } elsif ($action eq 'download-data') {
-            download('miflora-last-data.txt', status_text());
+            download('flower-monitor-last-data.txt', status_text());
         } else {
             die "Unknown action";
         }
     };
     if ($@) {
-        warn "MiFlora frontend: $@";
+        warn "Flower Monitor frontend: $@";
         print $cgi->header(-type => 'application/json', -charset => 'utf-8',
             -status => '400 Bad Request', -cache_control => 'no-store');
         print JSON::PP::encode_json({error => $L{'FLOWERMON.errRequest'}});
@@ -210,7 +210,7 @@ if ($cgi->request_method eq 'POST' && $cgi->param('btnSave')) {
 if ($cgi->request_method eq 'POST' && $cgi->param('btnPoll')) {
     eval { start_poll(); };
     if ($@) {
-        warn "Cannot launch MiFlora poll: $@";
+        warn "Cannot launch Flower Monitor poll: $@";
         push @errors, $L{'FLOWERMON.errPoll'};
     } else {
         $message = $L{'FLOWERMON.txtPollingMessage'};
