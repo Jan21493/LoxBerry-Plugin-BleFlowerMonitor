@@ -14,7 +14,7 @@ BlueZ D-Bus API**. All these sensors use the same protocol.
 for existing setups. Existing MQTT topics, UDP payloads and hourly polling intervals are
 preserved.
 
-<img src="assets/ble-flower-monitor-settings.png" alt="BLE Flower Monitor Settings" width="600">
+<img src="assets/ble-flower-monitor-settings.png" alt="BLE Flower Monitor Settings" width="1000">
 
 
 ## Requirements and installation
