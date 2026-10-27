@@ -62,7 +62,7 @@ echo "<INFO> Plugin CONFIG folder is: $PCONFIG"
 
 echo "<INFO> Copy back existing config files"
 if ! cp -v -r "/tmp/uploads/$PTEMPDIR/_upgrade/config/." "$PCONFIG/"; then
-    echo "<FAIL> Cannot restore the existing MiFlora configuration."
+    echo "<FAIL> Cannot restore the existing Flower Monitor configuration."
     exit 2
 fi
 
@@ -79,7 +79,7 @@ done
 
 MIGRATION_STATUS=0
 if ! /usr/bin/python3 "$PBIN/miflora.py" --migrate-config --configfile "$PCONFIG/miflora.cfg"; then
-    echo "<WARNING> Please select Default, USB or Onboard in the MiFlora settings and save before polling."
+    echo "<WARNING> Please select Default, USB or Onboard in the Flower Monitor settings and save before polling."
     MIGRATION_STATUS=1
 fi
 

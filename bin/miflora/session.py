@@ -103,7 +103,7 @@ def poll_session(datafile, logfile, level=None):
     outcome = {"status": "ERROR"}
     try:
         datafile.write_text("", encoding="utf-8")
-        logging.info("START %s - MiFlora scan starting", session_id, extra={"boundary": True})
+        logging.info("START %s - Flower Monitor scan starting", session_id, extra={"boundary": True})
         yield outcome
     finally:
         end_message = "%s - %s - %.1f s" % (session_id, outcome["status"], time.monotonic() - start)

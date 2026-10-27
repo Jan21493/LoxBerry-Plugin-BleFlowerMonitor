@@ -320,7 +320,7 @@ def run(args):
         try:
             fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
         except BlockingIOError:
-            logging.warning("A MiFlora poll is already running")
+            logging.warning("A Flower Monitor poll is already running")
             return 0
         logfile = getattr(args, "logfile", str(datafile.parent / "xiaomi-miflora.log"))
         level = logging.DEBUG if getattr(args, "debug", False) else None
@@ -362,7 +362,7 @@ def main():
             migrate_config(args.configfile)
             return 0
         except (OSError, ValueError, KeyError, configparser.Error) as error:
-            print(f"Cannot migrate MiFlora settings: {error}", file=sys.stderr)
+            print(f"Cannot migrate Flower Monitor settings: {error}", file=sys.stderr)
             return 1
     if args.list_adapters:
         try:
@@ -384,7 +384,7 @@ def main():
     try:
         return run(args)
     except (OSError, ValueError, KeyError, RuntimeError, configparser.Error, ImportError) as error:
-        logging.exception("MiFlora poll failed: %s", error)
+        logging.exception("Flower Monitor poll failed: %s", error)
         return 1
 
 

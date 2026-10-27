@@ -2,6 +2,7 @@ import argparse
 import asyncio
 import configparser
 import importlib.util
+from html import unescape
 from html.parser import HTMLParser
 import json
 import logging
@@ -19,6 +20,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 from urllib.parse import urlencode
 
 ROOT = Path(__file__).resolve().parents[1]
+LANGUAGES = ("de", "en", "es", "cs", "nl", "pl", "sk")
 sys.path.insert(0, str(ROOT / "bin"))
 from miflora import adapters, miflora_poller as poller, miflora_scanner as scanner
 from miflora import session
@@ -309,18 +311,40 @@ class ConfigTests(unittest.TestCase):
 
 
 class LanguageTests(unittest.TestCase):
+    def read_catalog(self, name, language, section):
+        config = configparser.ConfigParser(interpolation=None)
+        config.optionxform = str
+        path = ROOT / f"templates/lang/{name}_{language}.ini"
+        self.assertEqual(config.read(path, encoding="utf-8"), [str(path)])
+        self.assertEqual(config.sections(), [section])
+        for line in path.read_text(encoding="utf-8").splitlines()[1:]:
+            self.assertRegex(line, r'^\w+="[^"]+"$', path.name)
+        return dict(config[section])
+
     def test_web_language_keys_and_formatting_match(self):
         import re
-        catalogs = []
-        for language in ("de", "en"):
-            config = configparser.ConfigParser(interpolation=None)
-            config.optionxform = str
-            config.read(ROOT / f"templates/lang/language_{language}.ini", encoding="utf-8")
-            catalogs.append(dict(config["FLOWERMON"]))
-        self.assertEqual(catalogs[0].keys(), catalogs[1].keys())
-        for key in catalogs[0]:
-            self.assertEqual(re.findall(r"</?(?:b|i|code)>", catalogs[0][key]),
-                             re.findall(r"</?(?:b|i|code)>", catalogs[1][key]), key)
+        reference = self.read_catalog("language", "en", "FLOWERMON")
+        for language in LANGUAGES:
+            with self.subTest(language=language):
+                catalog = self.read_catalog("language", language, "FLOWERMON")
+                self.assertEqual(reference.keys(), catalog.keys())
+                for key in reference:
+                    self.assertEqual(re.findall(r"</?(?:b|i|code)>", reference[key]),
+                                     re.findall(r"</?(?:b|i|code)>", catalog[key]), key)
+                    self.assertEqual(re.findall(r"<code>.*?</code>|\\[v.]", reference[key]),
+                                     re.findall(r"<code>.*?</code>|\\[v.]", catalog[key]), key)
+                self.assertIn("'miflora'", catalog["hintMQTTTopic"])
+                self.assertIn("/flowermon/c47c8d66275b/temperature", catalog["hintMQTTTopic"])
+                self.assertIn("C47C8D66275B.Temperature=27.1", catalog["hintUDP"])
+                self.assertIn("_xiaomi-miflora.log", catalog["hintLogs"])
+
+    def test_help_catalogs_are_complete(self):
+        reference = self.read_catalog("help", "en", "HELP")
+        for language in LANGUAGES:
+            with self.subTest(language=language):
+                catalog = self.read_catalog("help", language, "HELP")
+                self.assertEqual(reference.keys(), catalog.keys())
+                self.assertEqual(catalog["LINK"], reference["LINK"])
 
 
 class RunTests(unittest.TestCase):
@@ -336,7 +360,9 @@ class RunTests(unittest.TestCase):
             with (Path(directory) / ".poll.lock").open("a") as lock:
                 plugin.fcntl.flock(lock, plugin.fcntl.LOCK_EX | plugin.fcntl.LOCK_NB)
                 with patch.object(plugin, "poll") as poll:
-                    self.assertEqual(plugin.run(args), 0)
+                    with self.assertLogs(level="WARNING") as captured:
+                        self.assertEqual(plugin.run(args), 0)
+                    self.assertIn("A Flower Monitor poll is already running", captured.output[0])
                     poll.assert_not_called()
 
     def test_bluez_error_has_failing_exit_and_visible_status(self):
@@ -440,7 +466,10 @@ class SessionTests(unittest.TestCase):
             self.assertIn("LOGEND", text)
             self.assertIn("Test failure", text)
             self.assertIn("Sensor found", text)
-            self.assertIn("Sensor found", (root / "poll-progress.log").read_text())
+            progress = (root / "poll-progress.log").read_text()
+            self.assertIn("Sensor found", progress)
+            self.assertIn("Flower Monitor scan starting", progress)
+            self.assertNotIn("MiFlora scan starting", progress)
 
     def test_exception_keeps_end_marker_and_leaves_retention_to_loxberry(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -804,7 +833,8 @@ our $lbpbindir = "$ENV{TEST_DATA}/bin";
 our $lbsconfigdir = "$ENV{TEST_DATA}";
 sub readlanguage {
     my ($template) = @_;
-    open(my $handle, '<', "$lbptemplatedir/lang/language_en.ini") or die $!;
+    my $language = $ENV{TEST_LANGUAGE} // 'en';
+    open(my $handle, '<', "$lbptemplatedir/lang/language_$language.ini") or die $!;
     my %language;
     my $section = '';
     while (my $line = <$handle>) {
@@ -921,6 +951,23 @@ sub get_miniservers { return (); }
             self.assertNotIn('name="btnSave"', status_html)
             self.assertIn('id="dataAutoScroll"', status_html)
             self.assertNotIn('name="btnRefresh"', status_html)
+            for language in LANGUAGES:
+                catalog = configparser.ConfigParser(interpolation=None)
+                catalog.read(ROOT / f"templates/lang/language_{language}.ini", encoding="utf-8")
+                for tab, label in (("settings", "sectionGeneral"), ("status", "sectionLoxone"),
+                                   ("logs", "hintLogs")):
+                    with self.subTest(language=language, tab=tab):
+                        localized = subprocess.run(
+                            ["perl", str(ROOT / "webfrontend/htmlauth/index.cgi")],
+                            env=dict(env, TEST_LANGUAGE=language, QUERY_STRING=f"tab={tab}"),
+                            capture_output=True,
+                        )
+                        self.assertEqual(localized.returncode, 0, localized.stderr.decode())
+                        page = localized.stdout.decode("utf-8")
+                        self.assertNotIn("<TMPL_", page)
+                        self.assertNotIn("\ufffd", page)
+                        expected = catalog["FLOWERMON"][label].strip('"')
+                        self.assertIn(expected, unescape(page))
             status_controls = Controls()
             status_controls.feed(status_html)
             controls.inputs.update(status_controls.inputs)
@@ -1055,6 +1102,9 @@ sub get_miniservers { return (); }
             self.assertEqual(configfile.read_text(), before)
             (root / "poll-progress.log").write_text("Temperature=21.8\nMQTT delivery acknowledged\n")
             (root / "lastdata.dat").write_text("Temperature=21.8\n")
+            download = endpoint("action=download-data")
+            self.assertIn("flower-monitor-last-data.txt", download)
+            self.assertIn("Temperature=21.8", download)
             status = endpoint("action=status")
             self.assertEqual(status.count("Temperature=21.8"), 1)
             progress = (
