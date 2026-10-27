@@ -1,7 +1,7 @@
 # LoxBerry Plugin: BLE Flower Monitor
 
 The BLE Flower Monitor plugin is an independently developed successor to Michael Miklis' discontinued
-[Xiaomi  MiFlora Flower Sensor Plugin](https://github.com/michaelmiklis/loxberry-plugin-miflora) plugin,
+[Xiaomi  MiFlora Flower Sensor Plugin](https://github.com/michaelmiklis/loxberry-plugin-miflora),
 retaining parts of its settings and display. The modern BlueZ D-Bus interface enables use on many Linux
 systems; onboard Raspberry Pi adapters and USB Bluetooth dongles are supported.
 
@@ -13,6 +13,8 @@ BlueZ D-Bus API**. All these sensors use the same protocol.
 **MQTT is the recommended transport.** UDP remains available as an alternative
 for existing setups. Existing MQTT topics, UDP payloads and hourly polling intervals are
 preserved.
+
+<img src="https://github.com/Jan21493/LoxBerry-Plugin-BleFlowerMonitor/assets/ble-flower-monitor-settings.png" height="600" alt="BLE Flower Monitor Plugin"/>
 
 ## Requirements and installation
 
