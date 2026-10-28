@@ -164,8 +164,9 @@
                 document.getElementById('mqttHelp').hidden = !mqtt;
                 document.getElementById('udpHelp').hidden = mqtt;
                 document.getElementById('inputColumn').textContent = mqtt ? messages.virtual : messages.udp;
-                const subscription = document.getElementById('mqttSubscription');
-                if (subscription) subscription.textContent = (inputs.dataset.topic + '/#').toLowerCase();
+                inputs.querySelectorAll('.mqttSubscription').forEach(function (subscription) {
+                    subscription.textContent = (inputs.dataset.topic + '/#').toLowerCase();
+                });
                 inputs.querySelectorAll('.topicColumn').forEach(function (cell) { cell.hidden = !mqtt; });
                 inputs.querySelectorAll('[data-key]').forEach(function (row) {
                     const example = inputExamples(inputs.dataset.topic, mac, row.dataset.key);

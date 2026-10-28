@@ -44,11 +44,16 @@ function testExamples() {
         return element({dataset: {key}, querySelector(selector) { return cells[selector]; }});
     });
     const columns = [element(), element()];
+    const subscriptions = [element(), element()];
     const elements = {
         mifloraMessages: element({dataset: {virtual: 'Virtual', udp: 'UDP'}}),
         loxoneInputs: element({
             dataset: {topic: 'miflora'},
-            querySelectorAll(selector) { return selector === '.topicColumn' ? columns : rows; }
+            querySelectorAll(selector) {
+                if (selector === '.topicColumn') return columns;
+                if (selector === '.mqttSubscription') return subscriptions;
+                return rows;
+            }
         }),
         sensorMac: element({value: '5C:85:7E:B0:F3:AD'}),
         inputTransport: element({value: 'mqtt'}),
@@ -57,7 +62,7 @@ function testExamples() {
     };
     vm.runInNewContext(source, context(elements, {}));
     assert.equal(rows[4].querySelector('.inputExample').textContent, example.mqtt);
-    assert.equal(elements.mqttSubscription.textContent, 'miflora/#');
+    assert(subscriptions.every(subscription => subscription.textContent === 'miflora/#'));
     assert.equal(elements.macError.hidden, true);
     elements.inputTransport.value = 'udp';
     elements.inputTransport.events.change();
@@ -71,8 +76,6 @@ function testExamples() {
     elements.sensorMac.events.input();
     assert.equal(elements.macError.hidden, false);
     assert(rows.every(r => r.querySelector('.inputExample').textContent === ''));
-    // Gateway v2 has no wildcard subscription element.
-    delete elements.mqttSubscription;
     elements.sensorMac.value = '5C:85:7E:B0:F3:AD';
     elements.inputTransport.value = 'mqtt';
     elements.inputTransport.events.change();

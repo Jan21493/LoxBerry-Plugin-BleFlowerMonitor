@@ -162,27 +162,37 @@
             </p>
             <TMPL_IF gatewayV2>
                 <p><TMPL_VAR hintGatewayV2></p>
-                <h3><TMPL_VAR NAME=guideManualTitle ESCAPE=HTML></h3>
-                <ol>
-                    <li><TMPL_VAR gatewayStep1></li>
-                    <li><TMPL_VAR gatewayStep2></li>
-                    <li><TMPL_VAR gatewayStep3></li>
-                    <li><TMPL_VAR gatewayStep4></li>
-                    <li><TMPL_VAR gatewayStep5></li>
-                </ol>
-                <h3><TMPL_VAR NAME=guideTemplateTitle ESCAPE=HTML></h3>
-                <ol>
-                    <li><TMPL_VAR templateStep1></li>
-                    <li><TMPL_VAR templateStep2></li>
-                    <li><TMPL_VAR templateStep3></li>
-                    <li><TMPL_VAR templateStep4></li>
-                    <li><TMPL_VAR templateStep5></li>
-                    <li><TMPL_VAR templateStep6></li>
-                </ol>
-                <p><TMPL_VAR gatewayChangedValues></p>
             <TMPL_ELSE>
                 <p><TMPL_VAR hintLoxoneMQTT></p>
-                <p><TMPL_VAR NAME=subscription ESCAPE=HTML> <code id="mqttSubscription"></code></p>
+            </TMPL_IF>
+            <h3><TMPL_VAR NAME=guideManualTitle ESCAPE=HTML></h3>
+            <ol>
+                <li><TMPL_VAR gatewayStep1></li>
+                <li><TMPL_VAR gatewayStep2></li>
+                <li><TMPL_VAR gatewayStep3></li>
+                <li><TMPL_VAR gatewayStep4></li>
+                <li><TMPL_VAR gatewayStep5></li>
+                <TMPL_IF gatewayV2>
+                    <li><TMPL_VAR guideStep6V2></li>
+                <TMPL_ELSE>
+                    <li><TMPL_VAR guideStep6V1> <code class="mqttSubscription"></code></li>
+                </TMPL_IF>
+            </ol>
+            <h3><TMPL_VAR NAME=guideTemplateTitle ESCAPE=HTML></h3>
+            <ol>
+                <li><TMPL_VAR templateStep1></li>
+                <li><TMPL_VAR templateStep2></li>
+                <li><TMPL_VAR templateStep3></li>
+                <li><TMPL_VAR templateStep4></li>
+                <li><TMPL_VAR templateStep5></li>
+                <TMPL_IF gatewayV2>
+                    <li><TMPL_VAR guideStep6V2></li>
+                <TMPL_ELSE>
+                    <li><TMPL_VAR guideStep6V1> <code class="mqttSubscription"></code></li>
+                </TMPL_IF>
+            </ol>
+            <TMPL_IF gatewayV2>
+                <p><TMPL_VAR gatewayChangedValues></p>
             </TMPL_IF>
         </TMPL_IF>
         <p class="miflora-hint"><TMPL_VAR hintTextInputs></p>

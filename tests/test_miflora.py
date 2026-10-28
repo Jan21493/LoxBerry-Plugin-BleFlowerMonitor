@@ -952,7 +952,7 @@ sub get_miniservers { return (); }
             self.assertIn("°C", status_html)
             self.assertIn("µS/cm", status_html)
             self.assertIn("virtual text input", status_html)
-            self.assertNotIn('id="mqttSubscription"', status_html)
+            self.assertNotIn('class="mqttSubscription"', status_html)
             self.assertNotIn('name="btnSave"', status_html)
             self.assertIn('id="dataAutoScroll"', status_html)
             self.assertNotIn('name="btnRefresh"', status_html)
@@ -1054,7 +1054,7 @@ sub get_miniservers { return (); }
                     mqtt["Gatewayversion"] = version
                 generalfile.write_text(json.dumps({"Base": {"Version": lbversion}, "Mqtt": mqtt}))
                 page = endpoint("tab=status")
-                self.assertEqual('id="mqttSubscription"' in page, not v2)
+                self.assertEqual(page.count('class="mqttSubscription"'), 0 if v2 else 2)
                 self.assertEqual("Resend all" in page, v2)
                 self.assertEqual("recommended for efficiency" in page, recommendation)
                 summary = page.split('<p class="miflora-gateway-status">', 1)[1].split("</p>", 1)[0]
@@ -1063,8 +1063,14 @@ sub get_miniservers { return (); }
                 if v2 or recommendation:
                     self.assertLess(summary.index("MQTT configuration found"), summary.index("MQTT Gateway version 2"))
                 self.assertLess(page.index("MQTT configuration found"),
-                                page.index("<ol>") if v2 else page.index('id="mqttSubscription"'))
+                                page.index("<ol>"))
                 self.assertIn('id="udpHelp" hidden', page)
+                self.assertEqual("select version 2" in page.lower(), False)
+                if not v2:
+                    self.assertIn("add the following entry in the <b><i>'Subscriptions'</i></b> tab", page)
+                    self.assertEqual(page.count("<code class=\"mqttSubscription\">"), 2)
+                else:
+                    self.assertIn("scan the Miniserver in the <b><i>'Subscriptions'</i></b> tab", page)
             generalfile.write_text("invalid")
             self.assertIn("Could not read the MQTT Gateway version", endpoint("tab=status"))
             generalfile.write_text(json.dumps({"Mqtt": {}}))
