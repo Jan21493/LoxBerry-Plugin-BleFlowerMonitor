@@ -1135,6 +1135,95 @@ sub get_miniservers { return (); }
             self.assertEqual((root / "retained_xiaomi-miflora.log").read_text(), "query log")
             self.assertIn('5C:85:7E:B0:F3:AD (Example)', endpoint("tab=status"))
 
+    def test_loxone_template_export(self):
+        import time
+        import xml.etree.ElementTree as ElementTree
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "LoxBerry").mkdir()
+            (root / "LoxBerry/System.pm").write_text(r'''
+package LoxBerry::System;
+use Exporter 'import';
+our @EXPORT = qw($lbpconfigdir $lbptemplatedir $lbpbindir $lbplogdir $lbpdatadir);
+our ($lbpconfigdir, $lbplogdir, $lbpdatadir, $lbpbindir, $lbsconfigdir) = ($ENV{TEST_DATA}) x 5;
+our $lbptemplatedir = "$ENV{TEST_DATA}/templates";
+sub readlanguage {
+    open(my $handle, '<', "$lbptemplatedir/lang/language_en.ini") or die $!;
+    my %language;
+    while (my $line = <$handle>) {
+        $language{"FLOWERMON.$1"} = $2 if $line =~ /^(\w+)="(.*)"\s*$/;
+    }
+    return %language;
+}
+1;
+''')
+            (root / "LoxBerry/Web.pm").write_text("package LoxBerry::Web; 1;")
+            (root / "templates").mkdir()
+            (root / "templates/lang").symlink_to(ROOT / "templates/lang")
+            (root / "templates/index.html").symlink_to(ROOT / "templates/index.html")
+            (root / "miflora.cfg").write_text((ROOT / "config/miflora.cfg").read_text())
+            env = dict(os.environ, PERL5LIB=str(root) + os.pathsep + os.environ.get("PERL5LIB", ""),
+                       TEST_DATA=str(root), REQUEST_METHOD="GET")
+
+            def call(action, payload=None):
+                call_env = dict(env, QUERY_STRING="action=" + action)
+                if payload is not None:
+                    call_env.update(REQUEST_METHOD="POST", CONTENT_TYPE="application/x-www-form-urlencoded",
+                                    CONTENT_LENGTH=str(len(payload)))
+                result = subprocess.run(["perl", str(ROOT / "webfrontend/htmlauth/index.cgi")],
+                                        input=payload.encode() if payload else None, env=call_env, capture_output=True)
+                self.assertEqual(result.returncode, 0, result.stderr.decode())
+                headers, _, body = result.stdout.partition(b"\r\n\r\n")
+                return headers.decode(), body
+
+            settings = json.loads(call("template-settings")[1])
+            self.assertEqual([p["key"] for p in settings["params"]],
+                             ["moisture", "battery", "conductivity", "light", "temperature", "polltime"])
+            self.assertEqual(settings["params"][0], {"key": "moisture", "label": "Moisture", "defaultLabel": "Moisture",
+                                                     "unit": "<v>% rH", "defaultUnit": "<v>% rH"})
+            self.assertEqual(settings["params"][4]["unit"], "<v.1>°C")
+            self.assertEqual(settings["names"], {})
+
+            form = [("mac", "5C:85:7E:B0:F3:AD"), ("name", "Olivenbaum"),
+                    ("mac", "5c857eb04a7e"), ("name", "Drachenpalme")]
+            for param in settings["params"]:
+                form += [("label_" + param["key"], param["label"]), ("unit_" + param["key"], param["unit"])]
+            form[4] = ("label_moisture", "Feuchtigkeit")
+            headers, body = call("template-export", urlencode(form))
+            name = "VI_BLE Flower Monitor MQTT Inputs " + time.strftime("%Y-%m-%d") + ".xml"
+            self.assertIn(f'filename="{name}"', headers)
+            self.assertIn("x-template-file: " + str(root / "templates/loxone" / name).lower(), headers.lower())
+            self.assertEqual((root / "templates/loxone" / name).read_bytes(), body)
+            self.assertTrue(body.startswith(b"\xef\xbb\xbf<?xml"))
+            self.assertTrue(body.endswith(b"</VirtualInHttp>\r\n"))
+            text = body.decode("utf-8-sig")
+            self.assertIn('Comment="Olivenbaum Feuchtigkeit" Check="\\." Signed="false" Analog="true"', text)
+            self.assertIn('Unit="&lt;v.1&gt;°C"', text)
+            document = ElementTree.fromstring(text.encode())
+            self.assertEqual(document.get("Title"), "BLE Flower Monitor MQTT Inputs")
+            self.assertEqual(document.get("Address"), ".")
+            self.assertEqual(document.find("Info").attrib, {"templateType": "2", "minVersion": "14051207"})
+            commands = document.findall("VirtualInHttpCmd")
+            self.assertEqual(len(commands), 12)
+            by_title = {command.get("Title"): command.attrib for command in commands}
+            self.assertEqual(by_title["flowermon_5c857eb04a7e_temperature"]["Comment"], "Drachenpalme Temperature")
+            self.assertEqual(by_title["flowermon_5c857eb04a7e_temperature"]["Signed"], "true")
+            self.assertEqual(by_title["flowermon_5c857eb0f3ad_moisture"]["Unit"], "<v>% rH")
+            self.assertEqual(by_title["flowermon_5c857eb0f3ad_polltime"]["Unit"], "<v.u>")
+
+            settings = json.loads(call("template-settings")[1])
+            self.assertEqual(settings["names"], {"5C:85:7E:B0:F3:AD": "Olivenbaum", "5C:85:7E:B0:4A:7E": "Drachenpalme"})
+            self.assertEqual(settings["params"][0]["label"], "Feuchtigkeit")
+            settings = json.loads(call("template-reset", "reset=1")[1])
+            self.assertEqual(settings["params"][0]["label"], "Moisture")
+            self.assertEqual(settings["names"]["5C:85:7E:B0:F3:AD"], "Olivenbaum")
+
+            for invalid in ([("mac", "invalid"), ("name", "x")] + form[4:], form[4:],
+                            [("mac", "5C857EB0F3AD"), ("name", "a\nb")] + form[4:]):
+                headers, body = call("template-export", urlencode(invalid))
+                self.assertIn("400", headers)
+                self.assertIn("Invalid input", json.loads(body)["error"])
+
     def test_js_examples_match_actual_transports(self):
         import shutil
         if not shutil.which("node"):

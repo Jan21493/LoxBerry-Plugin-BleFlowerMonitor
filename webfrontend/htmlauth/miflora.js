@@ -124,8 +124,10 @@
             const transport = document.getElementById('inputTransport');
             let addresses = [];
             let editing = false;
+            let realSensors = false;
             updateSensors = function (sensors, reset) {
                 if (!sensors) return;
+                realSensors = sensors.length > 0;
                 const next = sensors.length ? sensors : [exampleMac];
                 if (!reset && JSON.stringify(next) === JSON.stringify(addresses)) return;
                 const previous = addresses;
@@ -175,6 +177,7 @@
             macInput.addEventListener('input', renderInputs);
             if (sensorSelect) {
                 addresses = Array.from(sensorSelect.options, option => option.value);
+                realSensors = addresses.length > 0 && !(sensorSelect.options[0].dataset || {}).example;
                 sensorSelect.addEventListener('change', function () {
                     editing = false;
                     macInput.hidden = true;
@@ -194,6 +197,150 @@
             });
             transport.addEventListener('change', renderInputs);
             renderInputs();
+
+            const dialog = document.getElementById('templateDialog');
+            const exportButton = document.getElementById('exportTemplate');
+            if (dialog && exportButton) initTemplateDialog(dialog, exportButton, function () {
+                const list = [];
+                function add(value) {
+                    const raw = (value || '').trim();
+                    if (!/^(?:[0-9a-f]{12}|(?:[0-9a-f]{2}:){5}[0-9a-f]{2})$/i.test(raw)) return;
+                    const mac = raw.replace(/:/g, '').toUpperCase().match(/../g).join(':');
+                    if (!list.includes(mac)) list.push(mac);
+                }
+                if (realSensors) addresses.forEach(add);
+                if (editing || !list.length) add(macInput.value);
+                return list;
+            });
+        }
+
+        function initTemplateDialog(dialog, exportButton, templateAddresses) {
+            const sensorRows = document.getElementById('templateSensors');
+            const paramRows = document.getElementById('templateParams');
+            const templateError = document.getElementById('templateError');
+            const templateStored = document.getElementById('templateStored');
+
+            function textInput(className, value, label, placeholder) {
+                const field = document.createElement('input');
+                field.type = 'text';
+                field.className = className;
+                field.value = value || '';
+                field.maxLength = className === 'templateUnit' ? 32 : 64;
+                field.setAttribute('data-role', 'none');
+                field.setAttribute('aria-label', label);
+                if (placeholder) field.placeholder = placeholder;
+                return field;
+            }
+
+            function row(cells) {
+                const tr = document.createElement('tr');
+                cells.forEach(function (content) {
+                    const td = document.createElement('td');
+                    if (typeof content === 'string') td.textContent = content;
+                    else td.appendChild(content);
+                    tr.appendChild(td);
+                });
+                return tr;
+            }
+
+            function renderParams(params) {
+                paramRows.replaceChildren();
+                params.forEach(function (param) {
+                    const tr = row([param.key,
+                        textInput('templateLabel', param.label, param.key, param.defaultLabel),
+                        textInput('templateUnit', param.unit, param.key, param.defaultUnit)]);
+                    tr.dataset.param = param.key;
+                    paramRows.appendChild(tr);
+                });
+            }
+
+            function showTemplateError(error) {
+                templateError.textContent = error.message;
+                templateError.hidden = false;
+            }
+
+            function closeDialog() {
+                if (typeof dialog.close === 'function') dialog.close();
+                else dialog.removeAttribute('open');
+            }
+
+            exportButton.addEventListener('click', async function () {
+                templateError.hidden = true;
+                templateStored.hidden = true;
+                try {
+                    const settings = await request('template-settings');
+                    sensorRows.replaceChildren();
+                    templateAddresses().forEach(function (mac) {
+                        const include = document.createElement('input');
+                        include.type = 'checkbox';
+                        include.checked = true;
+                        include.setAttribute('data-role', 'none');
+                        const label = document.createElement('label');
+                        label.appendChild(include);
+                        label.appendChild(document.createTextNode(' ' + mac));
+                        const tr = row([label, textInput('templateName', settings.names[mac], mac, messages.namePlaceholder)]);
+                        tr.dataset.mac = mac;
+                        sensorRows.appendChild(tr);
+                    });
+                    renderParams(settings.params);
+                    if (typeof dialog.showModal === 'function') dialog.showModal();
+                    else dialog.setAttribute('open', '');
+                } catch (error) {
+                    showError(error);
+                }
+            });
+
+            dialog.querySelectorAll('[data-close]').forEach(function (button) {
+                button.addEventListener('click', closeDialog);
+            });
+
+            document.getElementById('templateReset').addEventListener('click', async function () {
+                templateError.hidden = true;
+                try {
+                    renderParams((await request('template-reset', 'POST')).params);
+                } catch (error) {
+                    showTemplateError(error);
+                }
+            });
+
+            document.getElementById('templateDownload').addEventListener('click', async function () {
+                templateError.hidden = true;
+                templateStored.hidden = true;
+                const body = new URLSearchParams();
+                sensorRows.querySelectorAll('tr').forEach(function (tr) {
+                    if (!tr.querySelector('input[type=checkbox]').checked) return;
+                    body.append('mac', tr.dataset.mac);
+                    body.append('name', tr.querySelector('.templateName').value);
+                });
+                paramRows.querySelectorAll('tr').forEach(function (tr) {
+                    body.append('label_' + tr.dataset.param, tr.querySelector('.templateLabel').value);
+                    body.append('unit_' + tr.dataset.param, tr.querySelector('.templateUnit').value);
+                });
+                try {
+                    const url = new URL('index.cgi', window.location.href);
+                    url.search = 'action=template-export';
+                    const response = await fetch(url, {method: 'POST', body: body, cache: 'no-store'});
+                    if (!response.ok) {
+                        const result = await response.json().catch(function () { return {}; });
+                        throw new Error(result.error || messages.error);
+                    }
+                    const match = /filename="?([^";]+)"?/.exec(response.headers.get('Content-Disposition') || '');
+                    const link = document.createElement('a');
+                    link.href = URL.createObjectURL(await response.blob());
+                    link.download = match ? match[1] : 'VI_BLE Flower Monitor MQTT Inputs.xml';
+                    document.body.appendChild(link);
+                    link.click();
+                    link.remove();
+                    setTimeout(function () { URL.revokeObjectURL(link.href); }, 1000);
+                    const stored = response.headers.get('X-Template-File');
+                    if (stored) {
+                        templateStored.textContent = messages.stored + ' ' + stored;
+                        templateStored.hidden = false;
+                    }
+                } catch (error) {
+                    showTemplateError(error);
+                }
+            });
         }
     }
     if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', init);

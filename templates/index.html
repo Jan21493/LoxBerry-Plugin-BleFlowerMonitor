@@ -19,6 +19,13 @@
         .miflora-field { grid-template-columns: minmax(0, 1fr); }
         .miflora-subsection { margin-left: .5em; }
     }
+    .miflora-dialog { width: min(52em, 95vw); max-height: 90vh; overflow: auto; padding: 1em 1.5em; border: 1px solid #888; border-radius: .4em; box-sizing: border-box; }
+    .miflora-dialog::backdrop { background: rgba(0, 0, 0, .4); }
+    .miflora-dialog-head { display: flex; align-items: center; justify-content: space-between; gap: 1em; }
+    .miflora-dialog-head h2 { margin: 0; }
+    .miflora-dialog-close { font-size: 1.6em; line-height: 1; background: none; border: 0; cursor: pointer; padding: 0 .2em; }
+    .miflora-dialog input[type=text] { width: 100%; box-sizing: border-box; padding: .3em; }
+    .miflora-dialog .miflora-table td { vertical-align: middle; }
     #txtLastData { font-family: monospace; height: 26em !important; max-height: 65vh; width: 100%; box-sizing: border-box; overflow: auto !important; white-space: pre; resize: vertical; }
 </style>
 <h1><TMPL_VAR NAME=heading ESCAPE=HTML></h1>
@@ -129,10 +136,11 @@
                 <TMPL_IF sensorAddresses>
                     <TMPL_LOOP sensorAddresses><option value="<TMPL_VAR NAME=address ESCAPE=HTML>"><TMPL_VAR NAME=address ESCAPE=HTML></option></TMPL_LOOP>
                 <TMPL_ELSE>
-                    <option value="5C:85:7E:B0:F3:AD">5C:85:7E:B0:F3:AD (<TMPL_VAR NAME=exampleMac ESCAPE=HTML>)</option>
+                    <option value="5C:85:7E:B0:F3:AD" data-example="1">5C:85:7E:B0:F3:AD (<TMPL_VAR NAME=exampleMac ESCAPE=HTML>)</option>
                 </TMPL_IF>
             </select>
             <button type="button" id="editMac" data-inline="true"><TMPL_VAR NAME=btnEditMac ESCAPE=HTML></button>
+            <button type="button" id="exportTemplate" data-inline="true"><TMPL_VAR NAME=btnExportTemplate ESCAPE=HTML></button>
         </div>
     </div>
     <p id="macError" role="alert" class="miflora-error" hidden><TMPL_VAR NAME=errMAC ESCAPE=HTML></p>
@@ -201,7 +209,35 @@
 </section>
 </TMPL_IF>
 <TMPL_VAR frmEnd>
-<div id="mifloraMessages" hidden data-polling="<TMPL_VAR NAME=txtPollingMessage ESCAPE=HTML>" data-error="<TMPL_VAR NAME=errRequest ESCAPE=HTML>" data-virtual="<TMPL_VAR NAME=virtualInput ESCAPE=HTML>" data-udp="<TMPL_VAR NAME=udpRecognition ESCAPE=HTML>" data-example="<TMPL_VAR NAME=exampleMac ESCAPE=HTML>"></div>
+<TMPL_IF isStatus>
+<dialog id="templateDialog" class="miflora-dialog" aria-labelledby="templateDialogTitle">
+    <div class="miflora-dialog-head">
+        <h2 id="templateDialogTitle"><TMPL_VAR NAME=tplTitle ESCAPE=HTML></h2>
+        <button type="button" class="miflora-dialog-close" data-role="none" data-close aria-label="<TMPL_VAR NAME=btnClose ESCAPE=HTML>">&times;</button>
+    </div>
+    <p class="miflora-hint"><TMPL_VAR NAME=tplHint ESCAPE=HTML></p>
+    <div class="miflora-table-wrap">
+    <table class="miflora-table">
+        <thead><tr><th><TMPL_VAR NAME=sensorMac ESCAPE=HTML></th><th><TMPL_VAR NAME=tplSensorName ESCAPE=HTML></th></tr></thead>
+        <tbody id="templateSensors"></tbody>
+    </table>
+    </div>
+    <div class="miflora-table-wrap">
+    <table class="miflora-table">
+        <thead><tr><th><TMPL_VAR NAME=parameter ESCAPE=HTML></th><th><TMPL_VAR NAME=tplLabel ESCAPE=HTML></th><th><TMPL_VAR NAME=unit ESCAPE=HTML></th></tr></thead>
+        <tbody id="templateParams"></tbody>
+    </table>
+    </div>
+    <p id="templateError" class="miflora-error" role="alert" hidden></p>
+    <p id="templateStored" class="miflora-message" role="status" hidden></p>
+    <div class="miflora-toolbar">
+        <button type="button" id="templateDownload" data-inline="true"><TMPL_VAR NAME=download ESCAPE=HTML></button>
+        <button type="button" id="templateReset" data-inline="true"><TMPL_VAR NAME=btnReset ESCAPE=HTML></button>
+        <button type="button" data-close data-inline="true"><TMPL_VAR NAME=btnClose ESCAPE=HTML></button>
+    </div>
+</dialog>
+</TMPL_IF>
+<div id="mifloraMessages" hidden data-polling="<TMPL_VAR NAME=txtPollingMessage ESCAPE=HTML>" data-error="<TMPL_VAR NAME=errRequest ESCAPE=HTML>" data-virtual="<TMPL_VAR NAME=virtualInput ESCAPE=HTML>" data-udp="<TMPL_VAR NAME=udpRecognition ESCAPE=HTML>" data-example="<TMPL_VAR NAME=exampleMac ESCAPE=HTML>" data-name-placeholder="<TMPL_VAR NAME=tplNamePlaceholder ESCAPE=HTML>" data-stored="<TMPL_VAR NAME=tplStored ESCAPE=HTML>"></div>
 <script src="miflora.js" defer></script>
 <script>
     $('select[name=chkPluginEnabled], select[name=chkLocaltime], select[name=chkMQTTEnabled], select[name=chkUDPEnabled]')
