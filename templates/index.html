@@ -238,7 +238,7 @@
 </dialog>
 </TMPL_IF>
 <div id="mifloraMessages" hidden data-polling="<TMPL_VAR NAME=txtPollingMessage ESCAPE=HTML>" data-error="<TMPL_VAR NAME=errRequest ESCAPE=HTML>" data-virtual="<TMPL_VAR NAME=virtualInput ESCAPE=HTML>" data-udp="<TMPL_VAR NAME=udpRecognition ESCAPE=HTML>" data-example="<TMPL_VAR NAME=exampleMac ESCAPE=HTML>" data-name-placeholder="<TMPL_VAR NAME=tplNamePlaceholder ESCAPE=HTML>" data-stored="<TMPL_VAR NAME=tplStored ESCAPE=HTML>"></div>
-<script src="miflora.js" defer></script>
+<script src="miflora.js?v=<TMPL_VAR NAME=jsVersion ESCAPE=URL>" defer></script>
 <script>
     $('select[name=chkPluginEnabled], select[name=chkLocaltime], select[name=chkMQTTEnabled], select[name=chkUDPEnabled]')
         .attr('data-role', 'flipswitch');

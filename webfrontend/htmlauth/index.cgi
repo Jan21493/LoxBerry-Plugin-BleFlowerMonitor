@@ -8,6 +8,7 @@ use HTML::Template;
 use JSON::PP ();
 use POSIX qw(setsid);
 use Fcntl qw(:flock F_SETFD);
+use File::Basename qw(dirname);
 use Encode qw(decode encode FB_CROAK);
 use LoxBerry::System;
 use LoxBerry::Web;
@@ -279,6 +280,8 @@ if ($tab eq 'logs') {
     }
 }
 $template->param(topicPrefix => $values{txtMQTTTopic});
+# Bust browser caches whenever miflora.js changes.
+$template->param(jsVersion => (stat(dirname(__FILE__) . '/miflora.js'))[9] // 0);
 $template->param(
     transportMQTTSelected => $values{chkMQTTEnabled} eq '1' || $values{chkUDPEnabled} ne '1',
     transportUDPSelected => $values{chkMQTTEnabled} ne '1' && $values{chkUDPEnabled} eq '1',

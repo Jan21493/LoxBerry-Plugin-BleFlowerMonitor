@@ -934,6 +934,7 @@ sub get_miniservers { return (); }
                 self.assertRegex(status_html, rf'<div class="miflora-field">\s*<label for="{field}">[^<]+</label>'
                                               rf'\s*<div><(?:select|input)\b[^>]*\bid="{field}"')
             self.assertIn('<label for="sensorSelect">Sensor MAC address</label>', status_html)
+            self.assertRegex(status_html, r'<script src="miflora\.js\?v=\d+" defer>')
             self.assertIn('id="clearOutput"', status_html)
             self.assertIn('id="editMac"', status_html)
             self.assertIn('5C:85:7E:B0:F3:AD (Example)', status_html)
