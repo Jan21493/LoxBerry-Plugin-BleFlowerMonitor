@@ -943,6 +943,7 @@ sub get_miniservers { return (); }
             self.assertIn("Resend all", status_html)
             self.assertIn("<h3>Importing the VIs into Loxone Config using a template</h3>", status_html)
             self.assertIn("<b><i>'My Templates'</i></b>", status_html)
+            self.assertIn("scan the Miniserver in the <b><i>'Subscriptions'</i></b> tab", status_html)
             self.assertIn("only works with the recommended delivery via MQTT", status_html)
             self.assertIn("single dot (<code>.</code>)", status_html)
             self.assertIn("<code>\\.</code>", status_html)
