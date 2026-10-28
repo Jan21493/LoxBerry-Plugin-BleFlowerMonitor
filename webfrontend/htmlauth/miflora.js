@@ -286,6 +286,8 @@
                     renderParams(settings.params);
                     if (typeof dialog.showModal === 'function') dialog.showModal();
                     else dialog.setAttribute('open', '');
+                    const firstName = sensorRows.querySelector('.templateName');
+                    if (firstName) firstName.focus();
                 } catch (error) {
                     showError(error);
                 }

@@ -1055,7 +1055,7 @@ sub get_miniservers { return (); }
                 generalfile.write_text(json.dumps({"Base": {"Version": lbversion}, "Mqtt": mqtt}))
                 page = endpoint("tab=status")
                 self.assertEqual(page.count('class="mqttSubscription"'), 0 if v2 else 2)
-                self.assertEqual("Resend all" in page, v2)
+                self.assertIn("Resend all", page)
                 self.assertEqual("recommended for efficiency" in page, recommendation)
                 summary = page.split('<p class="miflora-gateway-status">', 1)[1].split("</p>", 1)[0]
                 self.assertIn("MQTT configuration found", summary)
@@ -1066,6 +1066,7 @@ sub get_miniservers { return (); }
                                 page.index("<ol>"))
                 self.assertIn('id="udpHelp" hidden', page)
                 self.assertEqual("select version 2" in page.lower(), False)
+                self.assertIn("MQTT Gateway forwards only changed values", page)
                 if not v2:
                     self.assertIn("add the following entry in the <b><i>'Subscriptions'</i></b> tab", page)
                     self.assertEqual(page.count("<code class=\"mqttSubscription\">"), 2)
