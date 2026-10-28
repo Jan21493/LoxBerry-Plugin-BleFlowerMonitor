@@ -162,12 +162,19 @@
             </p>
             <TMPL_IF gatewayV2>
                 <p><TMPL_VAR hintGatewayV2></p>
+                <h3><TMPL_VAR NAME=guideManualTitle ESCAPE=HTML></h3>
                 <ol>
                     <li><TMPL_VAR gatewayStep1></li>
                     <li><TMPL_VAR gatewayStep2></li>
                     <li><TMPL_VAR gatewayStep3></li>
                     <li><TMPL_VAR gatewayStep4></li>
                     <li><TMPL_VAR gatewayStep5></li>
+                </ol>
+                <h3><TMPL_VAR NAME=guideTemplateTitle ESCAPE=HTML></h3>
+                <ol>
+                    <li><TMPL_VAR templateStep1></li>
+                    <li><TMPL_VAR templateStep2></li>
+                    <li><TMPL_VAR templateStep3></li>
                 </ol>
                 <p><TMPL_VAR gatewayChangedValues></p>
             <TMPL_ELSE>
@@ -216,6 +223,7 @@
         <button type="button" class="miflora-dialog-close" data-role="none" data-close aria-label="<TMPL_VAR NAME=btnClose ESCAPE=HTML>">&times;</button>
     </div>
     <p class="miflora-hint"><TMPL_VAR NAME=tplHint ESCAPE=HTML></p>
+    <p><b><TMPL_VAR NAME=tplMqttOnly ESCAPE=HTML></b></p>
     <div class="miflora-table-wrap">
     <table class="miflora-table">
         <thead><tr><th><TMPL_VAR NAME=sensorMac ESCAPE=HTML></th><th><TMPL_VAR NAME=tplSensorName ESCAPE=HTML></th></tr></thead>
