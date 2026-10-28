@@ -229,6 +229,18 @@ The MQTT/UDP selector initially follows the saved settings, preferring MQTT
 when both outputs are enabled; changing it only changes the help, not the
 active outputs.
 
+**Export template** beside **Edit** opens a dialog listing the discovered (or
+edited) MAC addresses with a name field each (e.g. "Olive tree"), plus a table
+of the parameters moisture, battery, conductivity, light, temperature and
+polltime with an editable label (default from the language file) and Loxone
+unit format (e.g. `<v>% rH`, `<v.1>°C`). **Download** creates a Loxone Config
+virtual HTTP input template `VI_BLE Flower Monitor MQTT Inputs <date>.xml` with
+one virtual HTTP input command per sensor and parameter. Each command's title is
+the exact MQTT Gateway input name, and its comment is "<name> <label>". A copy
+is stored in `/opt/loxberry/templates/plugins/ble-flower-monitor/loxone`.
+Names, labels and units are saved for the next export; **Reset** restores the
+default labels and units.
+
 For direct UDP, add a virtual UDP input on the configured plugin UDP port and
 an input command for each numeric value, for example:
 

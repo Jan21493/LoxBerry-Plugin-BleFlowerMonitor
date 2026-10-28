@@ -8,7 +8,8 @@ use HTML::Template;
 use JSON::PP ();
 use POSIX qw(setsid);
 use Fcntl qw(:flock F_SETFD);
-use Encode qw(decode FB_CROAK);
+use File::Basename qw(dirname);
+use Encode qw(decode encode FB_CROAK);
 use LoxBerry::System;
 use LoxBerry::Web;
 
@@ -62,6 +63,17 @@ if ($action ne '') {
             close($lock);
         } elsif ($action eq 'download-data') {
             download('flower-monitor-last-data.txt', status_text());
+        } elsif ($action eq 'template-settings') {
+            json_response(template_settings_response(read_template_settings()));
+        } elsif ($action eq 'template-reset') {
+            die "POST required" unless $cgi->request_method eq 'POST';
+            my $settings = read_template_settings();
+            delete $settings->{params};
+            write_template_settings($settings);
+            json_response(template_settings_response($settings));
+        } elsif ($action eq 'template-export') {
+            die "POST required" unless $cgi->request_method eq 'POST';
+            export_template();
         } else {
             die "Unknown action";
         }
@@ -268,6 +280,8 @@ if ($tab eq 'logs') {
     }
 }
 $template->param(topicPrefix => $values{txtMQTTTopic});
+# Bust browser caches whenever miflora.js changes.
+$template->param(jsVersion => (stat(dirname(__FILE__) . '/miflora.js'))[9] // 0);
 $template->param(
     transportMQTTSelected => $values{chkMQTTEnabled} eq '1' || $values{chkUDPEnabled} ne '1',
     transportUDPSelected => $values{chkMQTTEnabled} ne '1' && $values{chkUDPEnabled} eq '1',
@@ -354,4 +368,150 @@ sub download {
         -attachment => $name, -cache_control => 'no-store');
     binmode(STDOUT, ':encoding(UTF-8)');
     print $text;
+}
+
+# Defaults taken from a Loxone Config export of the matching virtual HTTP input commands.
+sub template_parameters {
+    return (
+        {key => 'moisture', lang => 'tplMoisture', unit => '<v>% rH', signed => 'false'},
+        {key => 'battery', lang => 'tplBattery', unit => '<v> %', signed => 'true'},
+        {key => 'conductivity', lang => 'tplConductivity', unit => "<v> \x{b5}S/cm", signed => 'false'},
+        {key => 'light', lang => 'tplLight', unit => '<v> lx', signed => 'false'},
+        {key => 'temperature', lang => 'tplTemperature', unit => "<v.1>\x{b0}C", signed => 'true'},
+        {key => 'polltime', lang => 'tplPolltime', unit => '<v.u>', signed => 'false'},
+    );
+}
+
+sub template_settings_file { return "$lbpconfigdir/loxone-template.json"; }
+
+sub read_template_settings {
+    my $file = template_settings_file();
+    return {} unless -e $file;
+    my $settings = eval { JSON::PP->new->decode(read_text($file, 1)) };
+    if ($@ || ref($settings) ne 'HASH') {
+        warn "Ignoring invalid Loxone template settings $file: $@";
+        return {};
+    }
+    return $settings;
+}
+
+sub write_template_settings {
+    my ($settings) = @_;
+    my $file = template_settings_file();
+    open(my $handle, '>:encoding(UTF-8)', "$file.tmp") or die "Cannot write $file.tmp: $!";
+    print $handle JSON::PP->new->canonical->pretty->encode($settings);
+    close($handle) or die "Cannot close $file.tmp: $!";
+    rename("$file.tmp", $file) or die "Cannot replace $file: $!";
+}
+
+sub template_settings_response {
+    my ($settings) = @_;
+    my $saved = ref($settings->{params}) eq 'HASH' ? $settings->{params} : {};
+    my @params;
+    foreach my $param (template_parameters()) {
+        my $stored = ref($saved->{$param->{key}}) eq 'HASH' ? $saved->{$param->{key}} : {};
+        my $label = $L{"FLOWERMON.$param->{lang}"};
+        push @params, {key => $param->{key}, defaultLabel => $label, defaultUnit => $param->{unit},
+            label => $stored->{label} // $label, unit => $stored->{unit} // $param->{unit}};
+    }
+    return {params => \@params, names => ref($settings->{names}) eq 'HASH' ? $settings->{names} : {}};
+}
+
+sub template_text {
+    my ($name, $max) = @_;
+    my @values = $cgi->can('multi_param') ? $cgi->multi_param($name) : $cgi->param($name);
+    my @decoded;
+    foreach my $value (@values) {
+        $value = eval { decode('UTF-8', $value // '', FB_CROAK) };
+        return undef unless defined $value;
+        $value =~ s/\A\s+|\s+\z//g;
+        return undef if length($value) > $max || $value =~ /[\x00-\x1f\x7f]/;
+        push @decoded, $value;
+    }
+    return \@decoded;
+}
+
+sub xml_attribute {
+    my ($value) = @_;
+    $value =~ s/&/&amp;/g;
+    $value =~ s/</&lt;/g;
+    $value =~ s/>/&gt;/g;
+    $value =~ s/"/&quot;/g;
+    return $value;
+}
+
+sub export_template {
+    my $macs = template_text('mac', 17);
+    my $names = template_text('name', 64);
+    my $valid = $macs && $names && @$macs && @$macs == @$names;
+    my (%labels, %units);
+    foreach my $param (template_parameters()) {
+        my $label = template_text("label_$param->{key}", 64);
+        my $unit = template_text("unit_$param->{key}", 32);
+        $valid &&= $label && $unit && @$label == 1 && @$unit == 1;
+        last unless $valid;
+        $labels{$param->{key}} = length($label->[0]) ? $label->[0] : $L{"FLOWERMON.$param->{lang}"};
+        $units{$param->{key}} = $unit->[0];
+    }
+    my %seen;
+    my @sensors;
+    if ($valid) {
+        foreach my $index (0 .. $#$macs) {
+            my $mac = uc($macs->[$index]);
+            $mac =~ s/://g if $mac =~ /\A(?:[0-9A-F]{2}:){5}[0-9A-F]{2}\z/;
+            unless ($mac =~ /\A[0-9A-F]{12}\z/) { $valid = 0; last; }
+            next if $seen{$mac}++;
+            push @sensors, {mac => $mac, name => $names->[$index]};
+        }
+    }
+    unless ($valid && @sensors) {
+        print $cgi->header(-type => 'application/json', -charset => 'utf-8',
+            -status => '400 Bad Request', -cache_control => 'no-store');
+        print JSON::PP::encode_json({error => $L{'FLOWERMON.errTemplateInput'}});
+        return;
+    }
+
+    my $settings = read_template_settings();
+    $settings->{names} = {} unless ref($settings->{names}) eq 'HASH';
+    $settings->{names}{join(':', unpack('(A2)*', $_->{mac}))} = $_->{name} foreach @sensors;
+    $settings->{params} = {map { ($_ => {label => $labels{$_}, unit => $units{$_}}) } keys %labels};
+    write_template_settings($settings);
+
+    my $topic = $pcfg->param('FLOWERMON.MQTTTOPIC') // $pcfg->param('MIFLORA.MQTTTOPIC') // 'flowermon';
+    $topic = join(',', @$topic) if ref($topic) eq 'ARRAY';
+    $topic = 'flowermon' unless length($topic);
+    my $title = 'BLE Flower Monitor MQTT Inputs';
+    my @lines = ('<?xml version="1.0" encoding="utf-8"?>',
+        qq(<VirtualInHttp Title="$title" Comment="" Address="." HintText="" PollingTime="604800">),
+        qq(\t<Info templateType="2" minVersion="14051207"/>));
+    foreach my $sensor (@sensors) {
+        my $prefix = length($sensor->{name})
+            ? $sensor->{name} : join(':', unpack('(A2)*', $sensor->{mac}));
+        foreach my $param (template_parameters()) {
+            my $input = lc("$topic/$sensor->{mac}/$param->{key}");
+            $input =~ s{[/ %]}{_}g;
+            push @lines, sprintf(qq(\t<VirtualInHttpCmd Title="%s" Comment="%s" Check="\\." Signed="%s" )
+                . qq(Analog="true" SourceValLow="0" DestValLow="0" SourceValHigh="100" DestValHigh="100" )
+                . qq(DefVal="0" MinVal="-10000" MaxVal="10000" Unit="%s" HintText=""/>),
+                xml_attribute($input), xml_attribute("$prefix $labels{$param->{key}}"),
+                $param->{signed}, xml_attribute($units{$param->{key}}));
+        }
+    }
+    push @lines, '</VirtualInHttp>';
+    my $xml = encode('UTF-8', "\x{feff}" . join("\r\n", @lines) . "\r\n");
+    my $filename = "VI_$title " . POSIX::strftime('%Y-%m-%d', localtime) . '.xml';
+
+    my $directory = "$lbptemplatedir/loxone";
+    my $stored = eval {
+        mkdir($directory) or die "Cannot create $directory: $!" unless -d $directory;
+        open(my $handle, '>:raw', "$directory/$filename") or die "Cannot write $directory/$filename: $!";
+        print $handle $xml;
+        close($handle) or die "Cannot close $directory/$filename: $!";
+        1;
+    };
+    warn "Cannot store Loxone template: $@" unless $stored;
+    print $cgi->header(-type => 'application/xml', -charset => 'utf-8', -attachment => $filename,
+        -cache_control => 'no-store', ($stored ? (-X_Template_File => "$directory/$filename") : ()));
+    binmode(STDOUT, ':raw');
+    print $xml;
 }
